@@ -1841,6 +1841,56 @@ function sanitizeProjectMentorPrompt(rawPrompt = '') {
   return prompt.slice(0, 160);
 }
 
+function classifyProjectMentorConversationTurn(rawPrompt = '') {
+  const text = String(rawPrompt || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const normalized = text.toLowerCase().replace(/[~.。!！]+$/g, '').trim();
+  if (/^(안녕|안녕하세요|하이|반가워|hello|hi)$/i.test(normalized)) return 'greeting';
+  if (/^(고마워|고맙습니다|감사|감사합니다|알겠어|알겠습니다|좋아|좋습니다|오케이|ㅇㅋ|응|그래|네)$/i.test(normalized)) return 'acknowledgement';
+  if (/^[?？!！.。~]+$/.test(text) || /^(뭐|뭐야|응|어|네)[?？]+$/i.test(text)) return 'clarification';
+  if (/^(넌|너는|너가|네가)?\s*(뭐야|누구야|뭘\s*할\s*수\s*있어|무엇을\s*할\s*수\s*있어)[?？]?$/i.test(normalized)) return 'capability';
+  if (/^(도와줘|도움이\s*필요해|뭘\s*물어봐야\s*해)[?？]?$/i.test(normalized)) return 'clarification';
+  return null;
+}
+
+function buildProjectMentorConversationResponse(mode, payload = {}, mentorMode = 'project_management_ai') {
+  const messages = {
+    greeting: '안녕하세요. 프로젝트 이야기든 다른 궁금한 점이든 편하게 말씀해주세요.',
+    acknowledgement: '좋아요. 이어서 궁금한 게 생기면 편하게 말씀해주세요.',
+    clarification: '제가 방금 답을 너무 복잡하게 드렸나요? 궁금한 부분을 짧게 말씀해주시면 그 부분만 다시 답할게요.',
+    capability: '저는 프로젝트의 작업, 일정, 활동 기록을 읽고 질문에 답하거나, 필요한 실행만 작업으로 반영하도록 돕는 WETHUS AI예요.'
+  };
+  return {
+    ok: true,
+    mentorMode,
+    reviewedAt: new Date().toISOString(),
+    summary: messages[mode] || messages.clarification,
+    priority: '',
+    executionBlocker: '',
+    nextActions: [],
+    questions: [],
+    toolActions: [],
+    evidenceGaps: [],
+    grounding: [],
+    changeLog: '',
+    conversationMode: mode,
+    projectContextual: false,
+    understanding: {
+      intent: projectMentorText(payload?.userPrompt, 300),
+      responseMode: 'conversation',
+      situation: '프로젝트 분석보다 짧은 대화 응답이 필요한 요청입니다.',
+      decisionNeeded: '',
+      whyNow: '',
+      constraints: [],
+      causalLinks: [],
+      referents: [],
+      selectedNodeIds: [],
+      evidenceCount: 0,
+      method: 'conversation-intent-v1'
+    }
+  };
+}
+
 function cleanProjectMentorSummary(value, fallback = '') {
   let summary = String(value || fallback || '').replace(/\s+/g, ' ').trim();
   const extraSection = summary.search(/\s+(?:우선순위|다음\s*(?:행동|액션|작업)|실행\s*(?:행동|액션|과제))\s*[:：]/i);
@@ -4623,6 +4673,7 @@ app.post('/ai/project-mentor', async (req, res) => {
 
     const mentorMode = detectProjectMentorMode(payload.project, payload.hub, payload.userPrompt);
     const systemPrompt = AGENT_SYSTEM_PROMPTS[mentorMode] || AGENT_SYSTEM_PROMPTS.project_management_ai;
+    const conversationTurn = payload.attachment ? null : classifyProjectMentorConversationTurn(payload.userPrompt);
 
     let memoryIngest = null;
     let memoryRecall = {
@@ -4634,12 +4685,14 @@ app.post('/ai/project-mentor', async (req, res) => {
       stats: { nodes: 0, edges: 0, episodes: 0 }
     };
     if (actorId) {
-      memoryIngest = agentMemoryStore.ingest(actorId, buildAgentMemorySnapshot(actorId, payload));
-      memoryRecall = agentMemoryStore.recall(
-        actorId,
-        `${payload.userPrompt} ${payload.project?.title || ''} ${payload.project?.category || ''}`,
-        { projectId: payload.project?.id, sessionId: payload.sessionId, limit: 30 }
-      );
+      if (!conversationTurn) {
+        memoryIngest = agentMemoryStore.ingest(actorId, buildAgentMemorySnapshot(actorId, payload));
+        memoryRecall = agentMemoryStore.recall(
+          actorId,
+          `${payload.userPrompt} ${payload.project?.title || ''} ${payload.project?.category || ''}`,
+          { projectId: payload.project?.id, sessionId: payload.sessionId, limit: 30 }
+        );
+      }
       agentMemoryStore.remember(actorId, {
         role: 'user',
         text: payload.userPrompt || `${payload.project?.title || '프로젝트'} 상태 점검`,
@@ -4682,6 +4735,10 @@ app.post('/ai/project-mentor', async (req, res) => {
         }
       };
     };
+
+    if (conversationTurn) {
+      return res.json(finalizeMentorResponse(buildProjectMentorConversationResponse(conversationTurn, payload, mentorMode)));
+    }
 
     let understanding = await understandProjectMentorContext(payload, memoryRecall);
     understanding = await resolveProjectMentorReferenceAlignment(understanding);

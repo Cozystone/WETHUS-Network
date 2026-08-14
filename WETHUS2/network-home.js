@@ -59,6 +59,8 @@
     calendarDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
     selectedDay: new Date().getDate(),
     selectedDate: '',
+    flowTab: 'schedule',
+    selectedScheduleId: '',
     busy: false
   };
   let existingNavHeightObserver = null;
@@ -388,8 +390,7 @@
         role: 'ai',
         text: dashboard.activeProject?.id
           ? `${projectTitle}의 작업, 일정, 활동 기록을 함께 읽고 다음 실행을 정리할 수 있어요.`
-          : '프로젝트를 시작하거나 참여하면 WETHUS AI가 작업, 일정, 활동 기록을 이어서 읽고 도와드려요.',
-        actions: tasks.slice(0, 3)
+          : '프로젝트를 시작하거나 참여하면 WETHUS AI가 작업, 일정, 활동 기록을 이어서 읽고 도와드려요.'
       }];
     }
     return [
@@ -425,17 +426,85 @@
     ];
   }
 
+  function lightweightChatReply(prompt) {
+    const text = String(prompt || '').replace(/\s+/g, ' ').trim();
+    const normalized = text.toLowerCase().replace(/[~.。!！]+$/g, '').trim();
+    if (!text) return null;
+    if (/^(안녕|안녕하세요|하이|반가워|hello|hi)$/i.test(normalized)) {
+      return {
+        text: '안녕하세요. 프로젝트 이야기든 다른 궁금한 점이든 편하게 말씀해주세요.',
+        conversationMode: 'greeting',
+        projectContextual: false
+      };
+    }
+    if (/^(고마워|고맙습니다|감사|감사합니다|알겠어|알겠습니다|좋아|좋습니다|오케이|ㅇㅋ|응|그래|네)$/i.test(normalized)) {
+      return {
+        text: '좋아요. 이어서 궁금한 게 생기면 편하게 말씀해주세요.',
+        conversationMode: 'acknowledgement',
+        projectContextual: false
+      };
+    }
+    if (/^[?？!！.。~]+$/.test(text) || /^(뭐|뭐야|응|어|네)[?？]+$/i.test(text)) {
+      return {
+        text: '제가 방금 답을 너무 복잡하게 드렸나요? 궁금한 부분을 짧게 말씀해주시면 그 부분만 다시 답할게요.',
+        conversationMode: 'clarification',
+        projectContextual: false
+      };
+    }
+    if (/^(넌|너는|너가|네가)?\s*(뭐야|누구야|뭘\s*할\s*수\s*있어|무엇을\s*할\s*수\s*있어)[?？]?$/i.test(normalized)) {
+      return {
+        text: '저는 프로젝트의 작업, 일정, 활동 기록을 읽고 질문에 답하거나, 필요한 실행만 작업으로 반영하도록 돕는 WETHUS AI예요.',
+        conversationMode: 'capability',
+        projectContextual: false
+      };
+    }
+    if (/^(도와줘|도움이\s*필요해|뭘\s*물어봐야\s*해)[?？]?$/i.test(normalized)) {
+      return {
+        text: '무엇을 해결하고 싶은지 한 문장으로 말씀해주세요. 일정 정리, 다음 행동, 팀원 찾기처럼 원하는 결과만 알려주셔도 돼요.',
+        conversationMode: 'clarification',
+        projectContextual: false
+      };
+    }
+    return null;
+  }
+
+  function normalizeChatHistory(messages) {
+    const normalized = (Array.isArray(messages) ? messages : []).map((message) => ({ ...message }));
+    normalized.forEach((message) => {
+      if (String(message?.id || '').startsWith('welcome-')) {
+        message.items = [];
+        message.actions = [];
+        message.evidence = '';
+      }
+    });
+    for (let index = 0; index < normalized.length - 1; index += 1) {
+      const userMessage = normalized[index];
+      const assistantMessage = normalized[index + 1];
+      if (userMessage?.role !== 'user' || assistantMessage?.role !== 'ai') continue;
+      const lightweight = lightweightChatReply(userMessage.text);
+      if (!lightweight) continue;
+      normalized[index + 1] = {
+        ...assistantMessage,
+        ...lightweight,
+        items: [],
+        actions: [],
+        evidence: '',
+        personId: ''
+      };
+    }
+    return normalized;
+  }
+
   function readMessages() {
     try {
       const parsed = JSON.parse(localStorage.getItem(chatStorageKey()) || 'null');
       if (Array.isArray(parsed) && parsed.length) {
         const recent = parsed.slice(-40).filter((message) => previewMode || !String(message?.id || '').startsWith('seed-'));
         if (!recent.length) throw new Error('seed-only-history');
-        const normalized = recent.map((message) => {
-          const evidence = String(message?.evidence || '').trim();
-          if (!evidence || /(맥락|흐름|상황).*(읽|살펴|바탕)|함께\s*(읽|살펴)/.test(evidence)) return message;
-          return { ...message, evidence: '프로젝트 기록의 맥락과 관계를 함께 읽은 답변이에요.' };
-        });
+        const evidenceNormalized = recent.map((message) => (
+          message?.evidence ? { ...message, evidence: '' } : message
+        ));
+        const normalized = normalizeChatHistory(evidenceNormalized);
         if (JSON.stringify(normalized) !== JSON.stringify(recent)) writeMessages(normalized);
         return normalized;
       }
@@ -475,11 +544,9 @@
       ...item,
       place: item.location || (item.kind === 'task' ? '프로젝트 작업' : '장소 미정'),
       icon: item.kind === 'task' ? 'ph-check-square' : (item.kind === 'meeting' ? 'ph-users-three' : (item.kind === 'interview' ? 'ph-chats-circle' : 'ph-calendar-dots')),
-      href: item.kind === 'community'
-        ? 'opportunities.html'
-        : (item.kind === 'task'
-            ? projectHubHref({ tab: 'overview', focus: 'tasks', taskId: item.taskId || '' })
-            : networkHref('schedule', { date: item.date || date }))
+      href: item.kind === 'task'
+        ? projectHubHref({ tab: 'overview', focus: 'tasks', taskId: item.taskId || '' })
+        : projectHubHref({ tab: 'overview', focus: 'schedule' })
     }));
   }
 
@@ -521,13 +588,13 @@
         </div>
         <ul class="nh-schedule-list" id="nhScheduleList">
           ${rows.length ? rows.map((row) => `
-            <li><a class="nh-schedule-item" href="${escapeHtml(row.href)}">
+            <li><a class="nh-schedule-item" href="#nhProjectFlow" data-home-schedule-id="${escapeHtml(row.id)}" data-home-schedule-date="${escapeHtml(row.date || dashboard.selectedDate)}">
               <span class="nh-schedule-icon"><i class="ph ${row.icon}" aria-hidden="true"></i></span>
               <span class="nh-schedule-time">${escapeHtml(row.time || '종일')}</span>
               <span class="nh-schedule-copy"><strong>${escapeHtml(row.title)}</strong><span>${escapeHtml(row.place)}</span></span>
               <span class="nh-schedule-dot" aria-hidden="true"></span>
             </a></li>
-          `).join('') : '<li class="nh-schedule-empty"><span>이 날짜에는 일정이 없습니다.</span><a href="' + escapeHtml(networkHref('schedule', { date: dashboard.selectedDate })) + '">일정 추가</a></li>'}
+          `).join('') : '<li class="nh-schedule-empty"><span>이 날짜에는 일정이 없습니다.</span><button type="button" data-open-schedule-adder>일정 추가</button></li>'}
         </ul>
       </section>
     `;
@@ -677,6 +744,158 @@
     `;
   }
 
+  function flowDateLabel(dateValue) {
+    const date = new Date(`${String(dateValue || '').slice(0, 10)}T12:00:00`);
+    if (Number.isNaN(date.getTime())) return '날짜 미정';
+    return new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' }).format(date);
+  }
+
+  function flowEventLabel(action) {
+    const labels = {
+      project_created: '프로젝트 생성',
+      project_updated: '프로젝트 수정',
+      task_created: '작업 추가',
+      task_updated: '작업 수정',
+      task_completed: '작업 완료',
+      task_reopened: '작업 재개',
+      schedule_created: '일정 추가',
+      connection_created: '연결 요청',
+      connection_accepted: '연결 수락',
+      ask_created: 'ASK 등록',
+      offer_created: 'OFFER 등록',
+      ai_recommendation_applied: 'AI 제안 반영',
+      ai_mentor_message_created: 'AI와 프로젝트 검토',
+      activity_recorded: '활동 기록',
+      material_added: '자료 추가'
+    };
+    return labels[action] || String(action || '활동').replace(/_/g, ' ');
+  }
+
+  function flowVisibilityLabel(visibility) {
+    const labels = {
+      team: '팀 공개',
+      private: '나만 보기',
+      network: '네트워크 공개',
+      public: '전체 공개'
+    };
+    return labels[String(visibility || '').toLowerCase()] || '팀 공개';
+  }
+
+  function flowScheduleKindLabel(kind) {
+    const labels = {
+      task: '프로젝트 작업',
+      meeting: '팀 미팅',
+      interview: '인터뷰',
+      milestone: '마일스톤',
+      event: '팀 일정',
+      community: '커뮤니티'
+    };
+    return labels[kind] || '팀 일정';
+  }
+
+  function flowActivityRows() {
+    const events = window.WETHUS?.listSemanticEvents?.({ projectId: dashboard.activeProject?.id || '', limit: 12 }) || [];
+    const meaningfulEvents = events.filter((event) => !(
+      event?.action === 'ai_mentor_message_created'
+      && lightweightChatReply(event?.metadata?.prompt)
+    ));
+    if (meaningfulEvents.length) return meaningfulEvents.slice(0, 8);
+    return (Array.isArray(dashboard.hub?.recentActivities) ? dashboard.hub.recentActivities : [])
+      .map((item, index) => ({
+        id: item?.id || `recent-activity-${index}`,
+        action: 'activity_recorded',
+        context: item?.text || item?.summary || '',
+        occurredAt: item?.createdAt || item?.occurredAt || ''
+      }))
+      .filter((item) => item.context)
+      .slice(0, 8);
+  }
+
+  function buildFlowSchedule() {
+    const rows = scheduleRows();
+    return `
+      <div class="nh-flow-toolbar">
+        <div class="nh-flow-date-controls">
+          <button type="button" data-flow-date-step="-1" aria-label="이전 날"><i class="ph ph-caret-left" aria-hidden="true"></i></button>
+          <label><span class="sr-only">일정 날짜</span><input id="nhFlowDate" type="date" value="${escapeHtml(dashboard.selectedDate)}" /></label>
+          <button type="button" data-flow-date-step="1" aria-label="다음 날"><i class="ph ph-caret-right" aria-hidden="true"></i></button>
+        </div>
+        <button class="nh-flow-add-button" type="button" data-open-schedule-adder><i class="ph ph-plus" aria-hidden="true"></i>일정 추가</button>
+      </div>
+      <form class="nh-flow-adder" id="nhFlowScheduleForm" hidden>
+        <input name="title" maxlength="80" required placeholder="일정 이름" aria-label="일정 이름" />
+        <input name="date" type="date" value="${escapeHtml(dashboard.selectedDate)}" required aria-label="일정 날짜" />
+        <input name="time" type="time" aria-label="일정 시간" />
+        <select name="kind" aria-label="일정 종류"><option value="meeting">팀 미팅</option><option value="interview">인터뷰</option><option value="milestone">마일스톤</option><option value="event">기타</option></select>
+        <input name="location" maxlength="100" placeholder="장소 또는 링크" aria-label="장소 또는 링크" />
+        <div class="nh-flow-adder-actions"><button class="nh-primary-button" type="submit">추가</button><button class="nh-secondary-button" type="button" data-close-schedule-adder>취소</button></div>
+      </form>
+      <div class="nh-flow-date-heading"><strong>${escapeHtml(flowDateLabel(dashboard.selectedDate))}</strong><span>${rows.length}개 일정</span></div>
+      ${rows.length ? `<div class="nh-flow-list">${rows.map((item) => `
+        <article class="nh-flow-row${String(item.id) === String(dashboard.selectedScheduleId) ? ' is-selected' : ''}" data-flow-schedule-row="${escapeHtml(item.id)}">
+          <span class="nh-flow-icon"><i class="ph ${item.icon}" aria-hidden="true"></i></span>
+          <div class="nh-flow-copy"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml([item.time || '시간 미정', item.place, item.completed ? '완료' : ''].filter(Boolean).join(' · '))}</span></div>
+          ${item.kind === 'task'
+            ? `<a class="nh-flow-row-action" href="${escapeHtml(item.href)}">작업 열기<i class="ph ph-arrow-up-right" aria-hidden="true"></i></a>`
+            : `<span class="nh-flow-row-kind">${escapeHtml(flowScheduleKindLabel(item.kind))}</span>`}
+        </article>
+      `).join('')}</div>` : `<div class="nh-flow-empty"><i class="ph ph-calendar-blank" aria-hidden="true"></i><strong>이 날짜에는 일정이 없습니다.</strong><span>위의 일정 추가 버튼으로 팀 미팅이나 마일스톤을 바로 남길 수 있어요.</span></div>`}
+    `;
+  }
+
+  function buildFlowActivity() {
+    const rows = flowActivityRows();
+    return rows.length ? `
+      <div class="nh-flow-list nh-flow-activity-list">${rows.map((event) => {
+        const detail = event?.metadata?.title || event?.metadata?.text || event?.metadata?.prompt || event?.context || '';
+        const occurredAt = event?.occurredAt ? new Date(event.occurredAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+        return `<article class="nh-flow-row"><span class="nh-flow-icon"><i class="ph ph-waveform" aria-hidden="true"></i></span><div class="nh-flow-copy"><strong>${escapeHtml(flowEventLabel(event.action))}</strong><span>${escapeHtml([detail, occurredAt].filter(Boolean).join(' · '))}</span></div><span class="nh-flow-visibility">${escapeHtml(flowVisibilityLabel(event.visibility))}</span></article>`;
+      }).join('')}</div>
+      <a class="nh-flow-footer-link" href="${escapeHtml(projectHubHref({ tab: 'progress' }))}">프로젝트 진행 로그 열기 <i class="ph ph-arrow-right" aria-hidden="true"></i></a>
+    ` : `<div class="nh-flow-empty"><i class="ph ph-waveform" aria-hidden="true"></i><strong>아직 실행 기록이 없습니다.</strong><span>작업을 추가하거나 완료하면 활동 흐름이 자동으로 쌓입니다.</span></div>`;
+  }
+
+  function buildFlowRequests() {
+    const asks = (window.WETHUS?.listAsks?.({ actorId: dashboard.actorId }) || [])
+      .filter((item) => !item.projectId || String(item.projectId) === String(dashboard.activeProject?.id || ''))
+      .slice(0, 4);
+    const offers = (window.WETHUS?.listOffers?.({ actorId: dashboard.actorId, includeInactive: true }) || []).slice(0, 4);
+    const cards = (rows, type) => rows.length
+      ? rows.map((item) => `<article class="nh-flow-request-card"><span>${type}</span><strong>${escapeHtml(item.text)}</strong><small>${escapeHtml(type === 'ASK' ? (item.due || '일정 무관') : (item.availability || '협의 가능'))} · ${escapeHtml(item.status || '')}</small></article>`).join('')
+      : `<div class="nh-flow-request-empty">등록한 ${type}가 없습니다.</div>`;
+    return `
+      <div class="nh-flow-request-grid">
+        <section><div class="nh-flow-request-title"><strong>필요한 도움</strong><span>${asks.length}</span></div>${cards(asks, 'ASK')}<form class="nh-flow-request-form" data-flow-request-form="ask"><input name="text" maxlength="180" required placeholder="예: 인터뷰 질문을 함께 검토해줄 분을 찾습니다." aria-label="새 ASK" /><button type="submit">ASK 등록</button></form></section>
+        <section><div class="nh-flow-request-title"><strong>도울 수 있는 일</strong><span>${offers.length}</span></div>${cards(offers, 'OFFER')}<form class="nh-flow-request-form" data-flow-request-form="offer"><input name="text" maxlength="180" required placeholder="예: 초기 사용자 인터뷰 설계를 함께 볼 수 있습니다." aria-label="새 OFFER" /><button type="submit">OFFER 등록</button></form></section>
+      </div>
+    `;
+  }
+
+  function buildFlowContent() {
+    if (dashboard.flowTab === 'activity') return buildFlowActivity();
+    if (dashboard.flowTab === 'requests') return buildFlowRequests();
+    return buildFlowSchedule();
+  }
+
+  function buildProjectFlow() {
+    const tabs = [
+      ['schedule', '일정'],
+      ['activity', '활동'],
+      ['requests', 'ASK / OFFER']
+    ];
+    return `
+      <section class="nh-panel nh-flow-panel" id="nhProjectFlow" aria-labelledby="nhFlowTitle">
+        <div class="nh-flow-head">
+          <div><span>PROJECT FLOW</span><h2 id="nhFlowTitle">일정과 활동을 한 흐름으로</h2><p>${escapeHtml(dashboard.activeProject?.title || '현재 프로젝트')}의 실행 기록을 홈에서 바로 확인하고 이어갈 수 있어요.</p></div>
+          <div class="nh-flow-tabs" role="tablist" aria-label="프로젝트 흐름">
+            ${tabs.map(([id, label]) => `<button type="button" role="tab" data-flow-tab="${id}" aria-selected="${dashboard.flowTab === id}" class="${dashboard.flowTab === id ? 'is-active' : ''}">${label}</button>`).join('')}
+          </div>
+        </div>
+        <div class="nh-flow-content" id="nhFlowContent" role="tabpanel">${buildFlowContent()}</div>
+      </section>
+    `;
+  }
+
   function messageMarkup(message) {
     const isAi = message.role === 'ai';
     const avatar = safeImageUrl(dashboard.user?.profileImage, fallbackAvatar);
@@ -781,6 +1000,7 @@
             ${buildHero()}
             ${buildPeople()}
             ${buildWork()}
+            ${buildProjectFlow()}
           </div>
           ${buildAiPanel()}
         </main>
@@ -792,6 +1012,7 @@
     integrateExistingNav();
     document.title = 'WETHUS | Home';
     renderCalendar();
+    renderFlow();
     renderMessages();
     bindInteractions();
   }
@@ -884,13 +1105,159 @@
     if (!list) return;
     const rows = scheduleRows();
     list.innerHTML = rows.length ? rows.map((row) => `
-      <li><a class="nh-schedule-item" href="${escapeHtml(row.href)}">
+      <li><a class="nh-schedule-item" href="#nhProjectFlow" data-home-schedule-id="${escapeHtml(row.id)}" data-home-schedule-date="${escapeHtml(row.date || dashboard.selectedDate)}">
         <span class="nh-schedule-icon"><i class="ph ${row.icon}" aria-hidden="true"></i></span>
         <span class="nh-schedule-time">${escapeHtml(row.time || '종일')}</span>
         <span class="nh-schedule-copy"><strong>${escapeHtml(row.title)}</strong><span>${escapeHtml(row.place)}</span></span>
         <span class="nh-schedule-dot" aria-hidden="true"></span>
       </a></li>
-    `).join('') : `<li class="nh-schedule-empty"><span>이 날짜에는 일정이 없습니다.</span><a href="${escapeHtml(networkHref('schedule', { date: dashboard.selectedDate }))}">일정 추가</a></li>`;
+    `).join('') : '<li class="nh-schedule-empty"><span>이 날짜에는 일정이 없습니다.</span><button type="button" data-open-schedule-adder>일정 추가</button></li>';
+    bindHomeScheduleLinks();
+    if (document.getElementById('nhFlowContent')) renderFlow();
+  }
+
+  function selectFlowDate(dateValue) {
+    const date = new Date(`${String(dateValue || '').slice(0, 10)}T12:00:00`);
+    if (Number.isNaN(date.getTime())) return false;
+    dashboard.selectedDate = localDateKey(date);
+    dashboard.selectedDay = date.getDate();
+    dashboard.calendarDate = new Date(date.getFullYear(), date.getMonth(), 1);
+    return true;
+  }
+
+  function scrollToProjectFlow(options = {}) {
+    if (options.date) selectFlowDate(options.date);
+    dashboard.flowTab = options.tab || 'schedule';
+    dashboard.selectedScheduleId = String(options.scheduleId || '');
+    renderCalendar();
+    renderSchedule();
+    const panel = document.getElementById('nhProjectFlow');
+    panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (options.openAdder) {
+      window.setTimeout(() => {
+        const form = document.getElementById('nhFlowScheduleForm');
+        if (form) form.hidden = false;
+        form?.querySelector('input[name="title"]')?.focus();
+      }, 220);
+    }
+  }
+
+  function bindHomeScheduleLinks() {
+    document.querySelectorAll('[data-home-schedule-id]').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        scrollToProjectFlow({
+          tab: 'schedule',
+          scheduleId: link.dataset.homeScheduleId || '',
+          date: link.dataset.homeScheduleDate || dashboard.selectedDate
+        });
+      });
+    });
+    document.querySelectorAll('.nh-profile-card [data-open-schedule-adder]').forEach((button) => {
+      button.addEventListener('click', () => scrollToProjectFlow({ tab: 'schedule', openAdder: true }));
+    });
+  }
+
+  function renderFlow() {
+    const content = document.getElementById('nhFlowContent');
+    if (!content) return;
+    content.innerHTML = buildFlowContent();
+    document.querySelectorAll('[data-flow-tab]').forEach((button) => {
+      const active = button.dataset.flowTab === dashboard.flowTab;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', String(active));
+    });
+    bindFlowInteractions();
+  }
+
+  function bindFlowInteractions() {
+    document.querySelectorAll('[data-flow-tab]').forEach((button) => {
+      button.onclick = () => {
+        dashboard.flowTab = button.dataset.flowTab || 'schedule';
+        dashboard.selectedScheduleId = '';
+        renderFlow();
+      };
+    });
+    document.querySelectorAll('[data-flow-date-step]').forEach((button) => {
+      button.addEventListener('click', () => {
+        selectFlowDate(addDays(dashboard.selectedDate, Number(button.dataset.flowDateStep || 0)));
+        dashboard.selectedScheduleId = '';
+        renderCalendar();
+        renderSchedule();
+      });
+    });
+    document.getElementById('nhFlowDate')?.addEventListener('change', (event) => {
+      if (!selectFlowDate(event.target.value)) return;
+      dashboard.selectedScheduleId = '';
+      renderCalendar();
+      renderSchedule();
+    });
+    document.querySelectorAll('#nhProjectFlow [data-open-schedule-adder]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const form = document.getElementById('nhFlowScheduleForm');
+        if (form) form.hidden = false;
+        form?.querySelector('input[name="title"]')?.focus();
+      });
+    });
+    document.querySelectorAll('[data-close-schedule-adder]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const form = document.getElementById('nhFlowScheduleForm');
+        if (form) form.hidden = true;
+      });
+    });
+    document.getElementById('nhFlowScheduleForm')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!dashboard.activeProject?.id) {
+        showToast('프로젝트를 먼저 시작해주세요.');
+        return;
+      }
+      const data = new FormData(event.currentTarget);
+      try {
+        const item = window.WETHUS?.addProjectScheduleItem?.(dashboard.activeProject.id, {
+          title: data.get('title'),
+          date: data.get('date'),
+          time: data.get('time'),
+          location: data.get('location'),
+          kind: data.get('kind')
+        });
+        dashboard.selectedScheduleId = String(item?.id || '');
+        selectFlowDate(data.get('date'));
+        dashboard.hub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub;
+        renderCalendar();
+        renderSchedule();
+        showToast('일정을 프로젝트 흐름에 추가했습니다.');
+      } catch (error) {
+        showToast(error?.message || '일정을 추가하지 못했습니다.');
+      }
+    });
+    document.querySelectorAll('[data-flow-request-form]').forEach((form) => {
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const data = new FormData(form);
+        const type = form.dataset.flowRequestForm;
+        try {
+          if (type === 'ask') {
+            window.WETHUS?.createAsk?.({
+              text: data.get('text'),
+              projectId: dashboard.activeProject?.id || '',
+              category: dashboard.activeProject?.category || 'General',
+              due: '이번 주'
+            });
+            showToast('ASK를 등록했습니다.');
+          } else {
+            window.WETHUS?.createOffer?.({
+              text: data.get('text'),
+              category: dashboard.activeProject?.category || 'General',
+              availability: '협의 가능'
+            });
+            showToast('OFFER를 등록했습니다.');
+          }
+          renderFlow();
+        } catch (error) {
+          showToast(error?.message || '요청을 등록하지 못했습니다.');
+        }
+      });
+    });
   }
 
   function renderMessages(options = {}) {
@@ -991,6 +1358,8 @@
     writeMessages(messages);
     renderMessages();
     renderTasks();
+    renderCalendar();
+    renderSchedule();
     showToast('AI 제안을 프로젝트 작업에 반영했습니다.');
   }
 
@@ -1127,8 +1496,9 @@
       renderSchedule();
     });
     document.getElementById('nhScheduleAll')?.addEventListener('click', () => {
-      location.href = networkHref('schedule', { date: dashboard.selectedDate });
+      scrollToProjectFlow({ tab: 'schedule' });
     });
+    bindHomeScheduleLinks();
     document.querySelectorAll('.nh-person-card [data-connect-id]').forEach((button) => {
       button.addEventListener('click', () => toggleConnection(button.dataset.connectId));
     });
@@ -1253,13 +1623,13 @@
   }
 
   function fallbackAiReply(prompt) {
+    const lightweight = lightweightChatReply(prompt);
+    if (lightweight) return lightweight;
     const lowered = String(prompt || '').toLowerCase();
     const tasks = projectTasks();
-    const activityCount = (window.WETHUS?.listSemanticEvents?.({ projectId: dashboard.activeProject?.id, limit: 20 }) || []).length;
     if (/누가|팀원|사람|연결|역할/.test(lowered)) {
       return {
         text: '현재 단계에서는 현장 운영과 인터뷰를 동시에 맡아본 실행형 팀원이 가장 필요해요. 박지훈님이 프로젝트 문맥과 가장 잘 맞습니다.',
-        evidence: '팀 구성과 프로젝트 흐름을 함께 살펴봤어요.',
         personId: 'network-person-field'
       };
     }
@@ -1273,7 +1643,6 @@
     if (/인사이트|요약|활동|진척/.test(lowered)) {
       return {
         text: dashboard.hub?.mentorSummary || '문제와 검증 대상은 선명합니다. 실행 담당과 측정 기준을 확정하면 다음 단계로 넘어갈 수 있어요.',
-        evidence: `프로젝트 기록 ${activityCount + tasks.length}건의 흐름을 함께 읽었어요.`,
         actions: tasks.slice(0, 2)
       };
     }
@@ -1354,6 +1723,8 @@
   }
 
   async function requestProjectMentor(prompt, attachment) {
+    const lightweight = attachment ? null : lightweightChatReply(prompt);
+    if (lightweight) return lightweight;
     if (!dashboard.activeProject?.id || (previewMode && !isLocal)) {
       await new Promise((resolve) => setTimeout(resolve, 620));
       return fallbackAiReply(prompt);
@@ -1391,13 +1762,15 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data?.ok === false) throw new Error(data?.error || `AI 요청 실패 (${response.status})`);
+        const projectContextual = data.projectContextual !== false;
+        const nextActions = projectContextual && Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [];
         return {
           text: String(data.summary || data.priority || '').trim() || '프로젝트 기록을 확인했습니다.',
-          items: Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [],
-          actions: Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [],
-          evidence: Number(data?.understanding?.evidenceCount || 0) > 0
-            ? `프로젝트 기록 ${Number(data.understanding.evidenceCount)}건의 맥락과 관계를 함께 읽었어요.`
-            : '현재 프로젝트 상황을 먼저 해석해 답했어요.',
+          items: nextActions,
+          actions: nextActions,
+          evidence: '',
+          conversationMode: data.conversationMode || data?.understanding?.responseMode || '',
+          projectContextual,
           raw: data
         };
       } catch (error) {
@@ -1407,7 +1780,6 @@
       }
     }
     const fallback = fallbackAiReply(prompt);
-    fallback.evidence = fallback.evidence || '현재 프로젝트 상황을 바탕으로 답했어요.';
     fallback.fallbackReason = lastError?.message || '';
     return fallback;
   }
@@ -1430,15 +1802,6 @@
     writeMessages(messages);
     renderMessages({ typing: true });
 
-    if (dashboard.activeProject?.id) {
-      const currentHub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {};
-      const teamChat = [
-        ...(Array.isArray(currentHub.teamChat) ? currentHub.teamChat : []),
-        { id: userMessage.id, from: userLabel(dashboard.user), kind: 'human', channel: 'ai_mentor', text: prompt, createdAt: userMessage.createdAt }
-      ].slice(-120);
-      dashboard.hub = window.WETHUS?.upsertProjectHub?.(dashboard.activeProject.id, { teamChat }) || currentHub;
-    }
-
     try {
       const response = await requestProjectMentor(prompt, options.attachment);
       const assistantMessage = {
@@ -1449,17 +1812,20 @@
         actions: response.actions || [],
         evidence: response.evidence || '',
         personId: response.personId || '',
+        conversationMode: response.conversationMode || '',
+        projectContextual: response.projectContextual !== false,
         createdAt: new Date().toISOString()
       };
       const nextMessages = readMessages();
       nextMessages.push(assistantMessage);
       writeMessages(nextMessages);
 
-      if (dashboard.activeProject?.id) {
+      if (dashboard.activeProject?.id && response.projectContextual !== false) {
         const currentHub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {};
         const raw = response.raw || {};
         const teamChat = [
           ...(Array.isArray(currentHub.teamChat) ? currentHub.teamChat : []),
+          { id: userMessage.id, from: userLabel(dashboard.user), kind: 'human', channel: 'ai_mentor', text: prompt, createdAt: userMessage.createdAt },
           { id: assistantMessage.id, from: 'WETHUS AI', kind: 'ai', channel: 'ai_mentor', text: [assistantMessage.text, ...(assistantMessage.items || [])].join('\n'), createdAt: assistantMessage.createdAt }
         ].slice(-120);
         dashboard.hub = window.WETHUS?.upsertProjectHub?.(dashboard.activeProject.id, {

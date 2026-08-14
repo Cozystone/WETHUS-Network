@@ -182,6 +182,34 @@ function expectList(name, value, maxLength) {
       fail('project mentor fallback should not leak internal auto-refresh prompts into user-facing questions');
     }
 
+    for (const [prompt, expectedMode] of [['안녕', 'greeting'], ['?', 'clarification']]) {
+      const conversationResponse = await fetch(`${baseUrl}/ai/project-mentor`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-user-id': 'mentor-smoke-user' },
+        body: JSON.stringify({
+          actorId: 'mentor-smoke-user',
+          sessionId: 'mentor-smoke-session',
+          trigger: 'conversation-smoke',
+          userPrompt: prompt,
+          project: {
+            id: 'mentor-smoke-project',
+            founderId: 'mentor-smoke-user',
+            title: 'WETHUS Commerce Hub',
+            category: 'StartupBusiness',
+            status: '진행 중'
+          },
+          hub: { weeklyTodos: ['배포 이슈 재현'] }
+        })
+      });
+      const conversationPayload = await conversationResponse.json().catch(() => ({}));
+      if (!conversationResponse.ok || !conversationPayload?.ok) fail(`${expectedMode} conversation should return ok=true`);
+      if (conversationPayload?.conversationMode !== expectedMode) fail(`${expectedMode} conversation mode should be preserved`);
+      if (conversationPayload?.projectContextual !== false) fail(`${expectedMode} conversation should not mutate project context`);
+      if (!String(conversationPayload?.summary || '').trim()) fail(`${expectedMode} conversation should include a natural reply`);
+      if (conversationPayload?.nextActions?.length) fail(`${expectedMode} conversation should not manufacture project actions`);
+      if (conversationPayload?.grounding?.length) fail(`${expectedMode} conversation should not manufacture project evidence`);
+    }
+
     const memoryResponse = await fetch(`${baseUrl}/ai/memory/graph?limit=100`, {
       headers: { 'x-user-id': 'mentor-smoke-user' }
     });
