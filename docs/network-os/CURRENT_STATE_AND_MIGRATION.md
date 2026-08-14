@@ -108,6 +108,16 @@ Events are immutable facts. Living Portfolio, activity feeds, project momentum, 
 - Partner discovery is opt-in and opportunity-first; partners do not receive unrestricted student search.
 - AI outputs describe evidence and possible connections. They do not assign human rankings or permanent scores.
 
+## Integrated slice in WETHUS2
+
+The first Network OS slice now lives inside the copied product in `WETHUS2/`; it is not a replacement application.
+
+- `project-hub.html` keeps the existing project, mentor, team, material, application, and integration flows.
+- The workspace now prioritizes current focus, next action, connected activity, and evidence gaps before secondary analysis.
+- Numeric progress grading has been replaced with narrative momentum based on observable work signals.
+- `app.js` records a canonical semantic activity envelope alongside existing state so project activity can be projected into the hub without discarding the current cloud-state contract.
+- The original WETHUS2 repository and the `wethus.co.kr` deployment remain outside this migration branch.
+
 ## Prototype boundary
 
-`network-preview/` is a design and interaction checkpoint. It intentionally uses deterministic demo data and browser-local actions. It does not replace the production authentication or backend. Its components and IA are the visual target for the incremental migration above.
+`network-preview/` remains a design checkpoint only. Product work must be integrated into the copied `WETHUS2/` application and verified against its real authentication, project, hub, and backend flows before any release decision.

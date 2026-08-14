@@ -483,6 +483,10 @@
         ],
         agents: [],
         agentActivityLogs: [],
+        semanticEvents: [],
+        asks: [],
+        offers: [],
+        connections: [],
         geminiApiKey: ''
       };
       localStorage.setItem(KEY, JSON.stringify(init));
@@ -513,6 +517,10 @@
 
     if (!Array.isArray(parsed.agents)) parsed.agents = [];
     if (!Array.isArray(parsed.agentActivityLogs)) parsed.agentActivityLogs = [];
+    if (!Array.isArray(parsed.semanticEvents)) parsed.semanticEvents = [];
+    if (!Array.isArray(parsed.asks)) parsed.asks = [];
+    if (!Array.isArray(parsed.offers)) parsed.offers = [];
+    if (!Array.isArray(parsed.connections)) parsed.connections = [];
 
     if (!Array.isArray(parsed.projects)) parsed.projects = [];
     let changed = false;
@@ -650,6 +658,191 @@
 
   function save(state) {
     localStorage.setItem(KEY, JSON.stringify(state));
+  }
+
+  function appendSemanticEvent(state, input = {}) {
+    const targetState = state && typeof state === 'object' ? state : load();
+    targetState.semanticEvents = Array.isArray(targetState.semanticEvents) ? targetState.semanticEvents : [];
+    const actorId = String(input.actorId || targetState.currentUserId || (targetState.devMode ? 'dev-temp' : '')).trim() || null;
+    const event = {
+      id: input.id || uid(),
+      actorId,
+      action: String(input.action || 'activity_recorded').trim(),
+      targetType: String(input.targetType || 'activity').trim(),
+      targetId: String(input.targetId || '').trim() || null,
+      projectId: String(input.projectId || '').trim() || null,
+      organizationId: String(input.organizationId || '').trim() || null,
+      context: String(input.context || '').trim() || null,
+      source: String(input.source || 'wethus').trim(),
+      visibility: String(input.visibility || 'network').trim(),
+      metadata: input.metadata && typeof input.metadata === 'object' ? input.metadata : {},
+      occurredAt: input.occurredAt || new Date().toISOString(),
+      schemaVersion: 1
+    };
+    targetState.semanticEvents.unshift(event);
+    targetState.semanticEvents = targetState.semanticEvents.slice(0, 1000);
+    return event;
+  }
+
+  function recordSemanticEvent(input = {}) {
+    const s = load();
+    const event = appendSemanticEvent(s, input);
+    save(s);
+    scheduleCloudSync('semantic-event');
+    return event;
+  }
+
+  function listSemanticEvents(options = {}) {
+    const s = load();
+    const actorId = String(options.actorId || '').trim();
+    const projectId = String(options.projectId || '').trim();
+    const actions = Array.isArray(options.actions) ? new Set(options.actions.map(String)) : null;
+    const limit = Math.max(1, Math.min(200, Number(options.limit || 50)));
+    return (s.semanticEvents || [])
+      .filter((event) => !actorId || String(event?.actorId || '') === actorId)
+      .filter((event) => !projectId || String(event?.projectId || '') === projectId)
+      .filter((event) => !actions || actions.has(String(event?.action || '')))
+      .sort((a, b) => new Date(b?.occurredAt || 0) - new Date(a?.occurredAt || 0))
+      .slice(0, limit);
+  }
+
+  function createAsk(payload = {}) {
+    const s = load();
+    const actorId = s.currentUserId || (s.devMode ? 'dev-temp' : null);
+    if (!actorId) throw new Error('로그인이 필요합니다.');
+    const text = String(payload.text || '').trim();
+    if (!text) throw new Error('필요한 도움을 입력해주세요.');
+    s.asks = Array.isArray(s.asks) ? s.asks : [];
+    const ask = {
+      id: uid(),
+      actorId,
+      projectId: String(payload.projectId || '').trim() || null,
+      text,
+      category: String(payload.category || 'General').trim(),
+      due: String(payload.due || '일정 무관').trim(),
+      visibility: String(payload.visibility || 'network').trim(),
+      status: 'open',
+      createdAt: new Date().toISOString(),
+      resolvedAt: null
+    };
+    s.asks.unshift(ask);
+    appendSemanticEvent(s, {
+      actorId,
+      action: 'ask_created',
+      targetType: 'ask',
+      targetId: ask.id,
+      projectId: ask.projectId,
+      visibility: ask.visibility,
+      metadata: { text: ask.text, category: ask.category, due: ask.due }
+    });
+    save(s);
+    scheduleCloudSync('ask-created');
+    return ask;
+  }
+
+  function listAsks(options = {}) {
+    const s = load();
+    const actorId = String(options.actorId || '').trim();
+    const status = String(options.status || '').trim();
+    return (s.asks || [])
+      .filter((ask) => !actorId || String(ask?.actorId || '') === actorId)
+      .filter((ask) => !status || String(ask?.status || '') === status)
+      .sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0));
+  }
+
+  function updateAskStatus(askId, status = 'resolved') {
+    const s = load();
+    const actorId = s.currentUserId || (s.devMode ? 'dev-temp' : null);
+    const ask = (s.asks || []).find((item) => String(item?.id || '') === String(askId || ''));
+    if (!ask) return null;
+    if (String(ask.actorId || '') !== String(actorId || '') && !isAdminActor()) throw new Error('ASK 수정 권한이 없습니다.');
+    ask.status = status;
+    ask.resolvedAt = status === 'resolved' ? new Date().toISOString() : null;
+    appendSemanticEvent(s, {
+      actorId,
+      action: status === 'resolved' ? 'ask_answered' : 'ask_updated',
+      targetType: 'ask',
+      targetId: ask.id,
+      projectId: ask.projectId,
+      visibility: ask.visibility,
+      metadata: { status }
+    });
+    save(s);
+    scheduleCloudSync('ask-updated');
+    return ask;
+  }
+
+  function createOffer(payload = {}) {
+    const s = load();
+    const actorId = s.currentUserId || (s.devMode ? 'dev-temp' : null);
+    if (!actorId) throw new Error('로그인이 필요합니다.');
+    const text = String(payload.text || '').trim();
+    if (!text) throw new Error('도울 수 있는 내용을 입력해주세요.');
+    s.offers = Array.isArray(s.offers) ? s.offers : [];
+    const offer = {
+      id: uid(),
+      actorId,
+      text,
+      category: String(payload.category || 'General').trim(),
+      availability: String(payload.availability || '협의 가능').trim(),
+      visibility: String(payload.visibility || 'network').trim(),
+      status: 'active',
+      createdAt: new Date().toISOString()
+    };
+    s.offers.unshift(offer);
+    appendSemanticEvent(s, {
+      actorId,
+      action: 'offer_created',
+      targetType: 'offer',
+      targetId: offer.id,
+      visibility: offer.visibility,
+      metadata: { text: offer.text, category: offer.category, availability: offer.availability }
+    });
+    save(s);
+    scheduleCloudSync('offer-created');
+    return offer;
+  }
+
+  function listOffers(options = {}) {
+    const s = load();
+    const actorId = String(options.actorId || '').trim();
+    return (s.offers || [])
+      .filter((offer) => !actorId || String(offer?.actorId || '') === actorId)
+      .filter((offer) => options.includeInactive || String(offer?.status || '') === 'active')
+      .sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0));
+  }
+
+  function toggleConnection(targetUserId) {
+    const s = load();
+    const actorId = s.currentUserId || (s.devMode ? 'dev-temp' : null);
+    const targetId = String(targetUserId || '').trim();
+    if (!actorId) throw new Error('로그인이 필요합니다.');
+    if (!targetId || targetId === String(actorId)) throw new Error('연결할 사용자를 확인해주세요.');
+    s.connections = Array.isArray(s.connections) ? s.connections : [];
+    const index = s.connections.findIndex((item) => String(item?.actorId || '') === String(actorId) && String(item?.targetUserId || '') === targetId);
+    let connected = false;
+    if (index >= 0) {
+      s.connections.splice(index, 1);
+    } else {
+      s.connections.unshift({ id: uid(), actorId, targetUserId: targetId, status: 'requested', createdAt: new Date().toISOString() });
+      connected = true;
+      appendSemanticEvent(s, {
+        actorId,
+        action: 'connection_created',
+        targetType: 'person',
+        targetId,
+        visibility: 'private'
+      });
+    }
+    save(s);
+    scheduleCloudSync('connection-toggled');
+    return { connected };
+  }
+
+  function listConnections(options = {}) {
+    const s = load();
+    const actorId = String(options.actorId || s.currentUserId || '').trim();
+    return (s.connections || []).filter((item) => !actorId || String(item?.actorId || '') === actorId);
   }
 
   function normalizeProfileText(value) {
@@ -1149,6 +1342,10 @@
       dmThreads: mergeRecordsByKey(remote.dmThreads, local.dmThreads, (thread) => String(thread?.id || '')),
       agents: mergeRecordsByKey(remote.agents, local.agents, (agent) => String(agent?.id || '')),
       agentActivityLogs: mergeRecordsByKey(remote.agentActivityLogs, local.agentActivityLogs, (log) => String(log?.id || '')),
+      semanticEvents: mergeRecordsByKey(remote.semanticEvents, local.semanticEvents, (event) => String(event?.id || '')),
+      asks: mergeRecordsByKey(remote.asks, local.asks, (ask) => String(ask?.id || '')),
+      offers: mergeRecordsByKey(remote.offers, local.offers, (offer) => String(offer?.id || '')),
+      connections: mergeRecordsByKey(remote.connections, local.connections, (connection) => String(connection?.id || `${connection?.actorId || ''}:${connection?.targetUserId || ''}`)),
       projectViews: mergeRecordsByKey(remote.projectViews, local.projectViews, (view) => String(view?.id || '')),
       currentUserId: local.currentUserId || remote.currentUserId || null
     };
@@ -1179,6 +1376,15 @@
     project.category = category;
     project.normalizedCategory = normalizedCategory;
     s.projects.unshift(project);
+    appendSemanticEvent(s, {
+      actorId: actor,
+      action: 'project_created',
+      targetType: 'project',
+      targetId: project.id,
+      projectId: project.id,
+      visibility: moderationStatus === 'approved' ? 'network' : 'private',
+      metadata: { title: project.title || '', category: project.category || '', moderationStatus }
+    });
     s.notifications = s.notifications || [];
     s.notifications.unshift({
       id: uid(),
@@ -1319,6 +1525,14 @@
     const hub = getProjectHub(projectId);
     const next = [{ id: uid(), text: String(text || ''), createdAt: new Date().toISOString() }, ...(hub.recentActivities || [])].slice(0, 30);
     upsertProjectHub(projectId, { recentActivities: next });
+    recordSemanticEvent({
+      action: 'contribution_created',
+      targetType: 'project',
+      targetId: projectId,
+      projectId,
+      visibility: 'team',
+      metadata: { summary: String(text || '').trim().slice(0, 240) }
+    });
     return next;
   }
 
@@ -1378,6 +1592,14 @@
       _liked: liked
     }));
     emitProjectUiSync({ reason: 'like_toggled', projectId, liked, likes: result.project?.likes || likedBy.length });
+    recordSemanticEvent({
+      actorId,
+      action: liked ? 'project_liked' : 'project_unliked',
+      targetType: 'project',
+      targetId: projectId,
+      projectId,
+      visibility: 'private'
+    });
     postProjectInteraction(`/projects/${encodeURIComponent(projectId)}/likes/toggle`)
       .then(() => {
         refreshServerLikes().catch(() => {});
@@ -1509,6 +1731,14 @@
       s.bookmarks.splice(idx, 1);
       bookmarked = false;
     }
+    appendSemanticEvent(s, {
+      actorId: actor,
+      action: bookmarked ? 'project_bookmarked' : 'project_bookmark_removed',
+      targetType: 'project',
+      targetId: projectId,
+      projectId,
+      visibility: 'private'
+    });
     save(s);
     emitProjectUiSync({ reason: 'bookmark_toggled', projectId, bookmarked });
     postProjectInteraction(`/projects/${encodeURIComponent(projectId)}/bookmarks/toggle`)
@@ -2046,6 +2276,14 @@
     const comments = Array.isArray(target.comments) ? [...target.comments] : [];
     comments.push({ id: uid(), author, userId: currentActorId(), text, createdAt: new Date().toISOString() });
     mutateProjectCaches(projectId, (project) => ({ ...project, comments }));
+    recordSemanticEvent({
+      action: 'project_comment_added',
+      targetType: 'project',
+      targetId: projectId,
+      projectId,
+      visibility: 'network',
+      metadata: { text: String(text || '').trim().slice(0, 180) }
+    });
     emitProjectUiSync({ reason: 'comment_added', projectId, commentCount: comments.length });
     postProjectInteraction(`/projects/${encodeURIComponent(projectId)}/comments`, { body: { text } })
       .then((payload) => {
@@ -2077,6 +2315,15 @@
     const admin = isAdminActor();
     if (!admin && target.founderId !== actor) throw new Error('수정 권한이 없습니다.');
     Object.assign(target, patch || {});
+    appendSemanticEvent(s, {
+      actorId: actor,
+      action: 'project_updated',
+      targetType: 'project',
+      targetId: projectId,
+      projectId,
+      visibility: 'team',
+      metadata: { changedFields: Object.keys(patch || {}).slice(0, 20) }
+    });
     save(s);
     return target;
   }
@@ -2161,6 +2408,14 @@
     u.youthTag = normalizeYouthTag(u);
     u.userTrack = getUserTrack(u);
     if (u.profileUpdatedAt === undefined) u.profileUpdatedAt = new Date().toISOString();
+    appendSemanticEvent(s, {
+      actorId: u.id,
+      action: 'profile_updated',
+      targetType: 'person',
+      targetId: u.id,
+      visibility: 'private',
+      metadata: { changedFields: Object.keys(patch || {}).filter((key) => !/password|token|secret/i.test(key)).slice(0, 20) }
+    });
     save(s);
     return u;
   }
@@ -3045,6 +3300,15 @@
       });
     }
     if (project) project.updatedAt = new Date().toISOString();
+    appendSemanticEvent(s, {
+      actorId: actor,
+      action: 'project_application_created',
+      targetType: 'project',
+      targetId: projectId,
+      projectId,
+      visibility: 'team',
+      metadata: { applicationId: app.id }
+    });
     save(s);
     postProjectInteraction(`/projects/${encodeURIComponent(projectId)}/applications`, { body: { motivation: motivation || '' } });
     scheduleCloudSync('save');
@@ -3753,6 +4017,15 @@
     ensureAgentProfile,
     runAgentTick,
     listAgentActivityLogs,
+    recordSemanticEvent,
+    listSemanticEvents,
+    createAsk,
+    listAsks,
+    updateAskStatus,
+    createOffer,
+    listOffers,
+    toggleConnection,
+    listConnections,
     currentActorId,
     uiConfirm,
     uiAlert,
