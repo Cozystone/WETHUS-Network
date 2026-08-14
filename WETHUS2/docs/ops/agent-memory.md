@@ -8,9 +8,13 @@ The Network home mentor uses a user-scoped temporal knowledge graph instead of s
 
 1. Build a current snapshot from the actor's accessible WETHUS state.
 2. Upsert typed nodes and relationships with timestamps and source metadata.
-3. Recall query-relevant nodes, recent episodes, and one-hop neighbors.
-4. Send only the bounded recalled subgraph to the configured model.
-5. Persist the user question and assistant answer as conversation episodes.
+3. Build a broad candidate subgraph from the focused project, its relationships, recent episodes, recency, and lightweight lexical signals.
+4. Run a context-understanding pass that infers the user's real intent, reconstructs the situation and timeline, identifies constraints and causal links, and selects only records that can change the answer.
+5. For follow-ups that name a person or refer to an earlier proposal, resolve the exact message and run focused causal checks: whether the proposal creates missing evidence, changes the failed step, has explicit support, or conflicts with the goal.
+6. Run a separate response pass using the synthesized situation model and selected records, rather than a dump of search snippets.
+7. Keep provenance in response metadata while the visible answer shows only a short context count, then persist the user question and the interpreted assistant answer as conversation episodes.
+
+The lexical score is deliberately secondary. It helps widen the candidate set but cannot decide the final context. `dolphin3:latest` currently exposes completion only in the local Ollama runtime, so the semantic selection is performed by the first structured reasoning pass instead of pretending that keyword overlap is semantic retrieval.
 
 The implementation is original Node.js code in `backend/agent-memory.js`. It follows ideas documented by Graphiti (temporal, provenance-aware graph memory) and Mem0 (recall before response, store after response). Both reference projects use Apache-2.0 licenses; no third-party source code is copied into WETHUS.
 

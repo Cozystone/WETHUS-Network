@@ -149,6 +149,30 @@ function expectList(name, value, maxLength) {
     if (Number(payload?.memory?.stats?.nodes || 0) < 3) {
       fail('project mentor response should persist graph nodes');
     }
+    if (!String(payload?.understanding?.situation || '').trim()) {
+      fail('project mentor response should include a synthesized situation model');
+    }
+    if (!String(payload?.understanding?.decisionNeeded || '').trim()) {
+      fail('project mentor understanding should identify the decision or execution target');
+    }
+    if (!String(payload?.understanding?.whyNow || '').trim()) {
+      fail('project mentor understanding should explain why the target matters now');
+    }
+    if (!Array.isArray(payload?.understanding?.selectedNodeIds)) {
+      fail('project mentor understanding should expose selected graph records');
+    }
+    if (payload?.understanding?.method !== 'structured-fallback-v1') {
+      fail('unavailable model should use the structured understanding fallback');
+    }
+    if (Number(payload?.understanding?.evidenceCount || 0) < 1) {
+      fail('situation model should select factual project records');
+    }
+    if (payload?.memory?.retrieval?.mode !== 'hybrid-context-candidates') {
+      fail('project mentor should report hybrid context retrieval');
+    }
+    if (/\[(?:Task|Activity|Project|Resource)\]|출처\s/.test(String(payload?.summary || ''))) {
+      fail('project mentor summary should not paste provenance labels into the answer');
+    }
     expectList('nextActions', payload?.nextActions, 3);
     expectList('questions', payload?.questions, 2);
     expectList('toolActions', payload?.toolActions, 2);
@@ -176,6 +200,10 @@ function expectList(name, value, maxLength) {
     }
     if (Number(memoryPayload?.graph?.stats?.episodes || 0) < 2) {
       fail('AI memory graph should retain the user and assistant episodes');
+    }
+    const assistantEpisode = memoryPayload?.graph?.nodes?.find((node) => node.type === 'Episode' && node.attributes?.role === 'assistant');
+    if (/\[(?:Task|Activity|Project|Resource)\]|출처\s/.test(String(assistantEpisode?.summary || ''))) {
+      fail('assistant memory should retain meaning without pasted provenance lines');
     }
 
     const deleteResponse = await fetch(`${baseUrl}/ai/memory`, {

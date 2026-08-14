@@ -311,7 +311,7 @@
         id: 'seed-ai-1',
         role: 'ai',
         text: '현장 운영과 청소년 인터뷰 경험이 풍부한 박지훈님을 추천드려요.',
-        evidence: '유사 프로젝트 4건 · 인터뷰 15회 · 현장 운영 경험',
+        evidence: '팀 구성과 실행 이력을 함께 살펴봤어요.',
         personId: 'network-person-field'
       },
       {
@@ -337,7 +337,16 @@
   function readMessages() {
     try {
       const parsed = JSON.parse(localStorage.getItem(chatStorageKey()) || 'null');
-      if (Array.isArray(parsed) && parsed.length) return parsed.slice(-40);
+      if (Array.isArray(parsed) && parsed.length) {
+        const recent = parsed.slice(-40);
+        const normalized = recent.map((message) => {
+          const evidence = String(message?.evidence || '').trim();
+          if (!evidence || /(맥락|흐름|상황).*(읽|살펴|바탕)|함께\s*(읽|살펴)/.test(evidence)) return message;
+          return { ...message, evidence: '프로젝트 기록의 맥락과 관계를 함께 읽은 답변이에요.' };
+        });
+        if (JSON.stringify(normalized) !== JSON.stringify(recent)) writeMessages(normalized);
+        return normalized;
+      }
     } catch (_) {}
     const seeded = initialMessages();
     writeMessages(seeded);
@@ -1007,7 +1016,7 @@
     if (/누가|팀원|사람|연결|역할/.test(lowered)) {
       return {
         text: '현재 단계에서는 현장 운영과 인터뷰를 동시에 맡아본 실행형 팀원이 가장 필요해요. 박지훈님이 프로젝트 문맥과 가장 잘 맞습니다.',
-        evidence: `현재 작업 ${tasks.length}건 · 최근 활동 ${activityCount}건 기준`,
+        evidence: '팀 구성과 프로젝트 흐름을 함께 살펴봤어요.',
         personId: 'network-person-field'
       };
     }
@@ -1021,7 +1030,7 @@
     if (/인사이트|요약|활동|진척/.test(lowered)) {
       return {
         text: dashboard.hub?.mentorSummary || '문제와 검증 대상은 선명합니다. 실행 담당과 측정 기준을 확정하면 다음 단계로 넘어갈 수 있어요.',
-        evidence: `프로젝트 로그 ${activityCount}건과 작업 ${tasks.length}건을 함께 읽었습니다.`,
+        evidence: `프로젝트 기록 ${activityCount + tasks.length}건의 흐름을 함께 읽었어요.`,
         actions: tasks.slice(0, 2)
       };
     }
@@ -1143,7 +1152,9 @@
           text: String(data.summary || data.priority || '').trim() || '프로젝트 기록을 확인했습니다.',
           items: Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [],
           actions: Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [],
-          evidence: Array.isArray(data.grounding) ? data.grounding.slice(0, 2).join(' · ') : '',
+          evidence: Number(data?.understanding?.evidenceCount || 0) > 0
+            ? `프로젝트 기록 ${Number(data.understanding.evidenceCount)}건의 맥락과 관계를 함께 읽었어요.`
+            : '현재 프로젝트 상황을 먼저 해석해 답했어요.',
           raw: data
         };
       } catch (error) {
@@ -1153,7 +1164,7 @@
       }
     }
     const fallback = fallbackAiReply(prompt);
-    fallback.evidence = fallback.evidence || '현재 저장된 프로젝트 기록 기준';
+    fallback.evidence = fallback.evidence || '현재 프로젝트 상황을 바탕으로 답했어요.';
     fallback.fallbackReason = lastError?.message || '';
     return fallback;
   }

@@ -680,37 +680,93 @@ export function createAgentMemoryStore({ read, write, clock = () => new Date(), 
 
   function recall(actorId, query, options = {}) {
     const normalizedActorId = text(actorId, 180);
-    if (!normalizedActorId) return { contextText: '', nodes: [], edges: [], sources: [], stats: { nodes: 0, edges: 0, episodes: 0 } };
+    const emptyRecall = {
+      contextText: '',
+      nodes: [],
+      edges: [],
+      sources: [],
+      retrieval: { mode: 'hybrid-context-candidates', candidateCount: 0, projectContextIncluded: false },
+      stats: { nodes: 0, edges: 0, episodes: 0 }
+    };
+    if (!normalizedActorId) return emptyRecall;
     const document = load();
     const scope = document.scopes[scopeKey(normalizedActorId)];
-    if (!scope) return { contextText: '', nodes: [], edges: [], sources: [], stats: { nodes: 0, edges: 0, episodes: 0 } };
+    if (!scope) return emptyRecall;
 
     const queryTokens = tokenize(query);
     const projectId = text(options.projectId, 180);
+    const sessionId = text(options.sessionId, 180);
     const nowMs = clock().getTime();
-    const scored = scope.nodes
-      .filter((node) => !node.validTo)
+    const activeNodes = scope.nodes.filter((node) => !node.validTo);
+    const nodeById = new Map(activeNodes.map((node) => [node.id, node]));
+    const focusProjectNodeId = projectId ? projectNodeId(projectId) : '';
+    const projectContextIds = new Set(focusProjectNodeId ? [focusProjectNodeId] : []);
+    if (focusProjectNodeId) {
+      for (const edge of scope.edges) {
+        if (edge.validTo || (edge.from !== focusProjectNodeId && edge.to !== focusProjectNodeId)) continue;
+        projectContextIds.add(edge.from);
+        projectContextIds.add(edge.to);
+      }
+    }
+
+    const scored = activeNodes
       .map((node) => {
         const nodeTokens = tokenize(nodeSearchText(node));
         let overlap = 0;
         for (const token of queryTokens) if (nodeTokens.has(token)) overlap += 1;
-        const projectBoost = projectId && (node.id === projectNodeId(projectId) || String(node.attributes?.projectId || '') === projectId) ? 8 : 0;
-        const actorBoost = node.id === personNodeId(normalizedActorId) ? 2 : 0;
+        const belongsToProject = projectId && (
+          node.id === focusProjectNodeId
+          || String(node.attributes?.projectId || '') === projectId
+          || projectContextIds.has(node.id)
+        );
+        const projectBoost = belongsToProject ? (node.id === focusProjectNodeId ? 12 : 7) : 0;
+        const actorBoost = node.id === personNodeId(normalizedActorId) ? 4 : 0;
+        const conversationBoost = node.type === 'Episode' && (
+          (projectId && String(node.attributes?.projectId || '') === projectId)
+          || (sessionId && String(node.attributes?.sessionId || '') === sessionId)
+        ) ? 3 : 0;
         const typeBoost = node.type === 'Project' ? 1.5 : node.type === 'Episode' ? 1 : 0.5;
-        return { node, score: overlap * 3 + projectBoost + actorBoost + typeBoost + recencyScore(node, nowMs) };
+        return {
+          node,
+          overlap,
+          belongsToProject,
+          score: overlap * 1.25 + projectBoost + actorBoost + conversationBoost + typeBoost + recencyScore(node, nowMs)
+        };
       })
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
 
     const maxNodes = Math.max(6, Math.min(30, Number(options.limit || 18)));
-    const selected = new Map(scored.slice(0, Math.max(8, Math.floor(maxNodes * 0.7))).map((item) => [item.node.id, item.node]));
-    const anchorIds = new Set([...selected.keys()].slice(0, 8));
+    const selected = new Map();
+    const addNode = (node) => {
+      if (node && selected.size < maxNodes) selected.set(node.id, node);
+    };
+    const addScored = (items, limit) => {
+      let added = 0;
+      for (const item of items) {
+        const before = selected.size;
+        addNode(item.node);
+        if (selected.size > before) added += 1;
+        if (added >= limit || selected.size >= maxNodes) break;
+      }
+    };
+
+    addNode(nodeById.get(personNodeId(normalizedActorId)));
+    addNode(nodeById.get(focusProjectNodeId));
+    addScored(scored.filter((item) => item.belongsToProject && item.node.type !== 'Episode'), Math.max(6, Math.floor(maxNodes * 0.55)));
+    addScored(scored.filter((item) => item.node.type === 'Episode' && (
+      (projectId && String(item.node.attributes?.projectId || '') === projectId)
+      || (sessionId && String(item.node.attributes?.sessionId || '') === sessionId)
+    )), 6);
+    addScored(scored.filter((item) => item.overlap > 0), Math.max(3, Math.floor(maxNodes * 0.2)));
+    addScored(scored, maxNodes);
+
+    const anchorIds = new Set([...selected.keys()].slice(0, 12));
     for (const edge of scope.edges) {
       if (selected.size >= maxNodes) break;
       if (!anchorIds.has(edge.from) && !anchorIds.has(edge.to)) continue;
       const neighborId = anchorIds.has(edge.from) ? edge.to : edge.from;
-      const neighbor = scope.nodes.find((node) => node.id === neighborId && !node.validTo);
-      if (neighbor) selected.set(neighbor.id, neighbor);
+      addNode(nodeById.get(neighborId));
     }
 
     const nodes = [...selected.values()];
@@ -747,6 +803,12 @@ export function createAgentMemoryStore({ read, write, clock = () => new Date(), 
       nodes,
       edges,
       sources,
+      retrieval: {
+        mode: 'hybrid-context-candidates',
+        candidateCount: nodes.length,
+        projectContextIncluded: !!focusProjectNodeId && nodes.some((node) => node.id === focusProjectNodeId),
+        lexicalWeight: 1.25
+      },
       stats: { nodes: scope.nodes.length, edges: scope.edges.length, episodes: scope.episodeIds.length }
     };
   }

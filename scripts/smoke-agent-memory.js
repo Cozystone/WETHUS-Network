@@ -74,6 +74,19 @@ function fail(message) {
   if (!recall.contextText.includes('Google Docs')) fail('recall should include a connected tool');
   if (recall.stats.episodes !== 2) fail(`expected 2 episodes, got ${recall.stats.episodes}`);
   if (!recall.sources.length) fail('recall should retain source provenance');
+  if (recall.retrieval?.mode !== 'hybrid-context-candidates') fail('recall should expose hybrid context retrieval metadata');
+
+  const contextRecall = store.recall(actorId, '지금 판단을 내리려면 무엇부터 봐야 해?', {
+    projectId,
+    sessionId: 'memory-smoke-session',
+    limit: 20
+  });
+  if (!contextRecall.contextText.includes('사용자 인터뷰 5명 진행')) {
+    fail('focused project context should remain available even without matching query keywords');
+  }
+  if (!contextRecall.retrieval?.projectContextIncluded) {
+    fail('focused project retrieval should include its project anchor');
+  }
 
   const isolated = store.inspect('different-user');
   if (isolated.stats.nodes !== 0 || isolated.stats.edges !== 0) fail('memory must be isolated by actor');
