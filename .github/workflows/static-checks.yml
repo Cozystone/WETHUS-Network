@@ -49,6 +49,9 @@ jobs:
       - name: Project mentor smoke
         run: node scripts/smoke-project-mentor.js
 
+      - name: Agent memory smoke
+        run: node scripts/smoke-agent-memory.js
+
       - name: Integration activity log smoke
         run: node scripts/smoke-integration-activity-log.js
 

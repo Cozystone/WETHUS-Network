@@ -67,7 +67,9 @@ function expectList(name, value, maxLength) {
         PORT: String(port),
         WETHUS_DATA_DIR: smokeDataDir,
         RATE_LIMIT_DISABLED: 'true',
-        AI_PROVIDER: 'local'
+        AI_PROVIDER: 'local',
+        OLLAMA_BASE_URL: 'http://127.0.0.1:9',
+        OLLAMA_MODEL: 'missing-model'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -83,11 +85,15 @@ function expectList(name, value, maxLength) {
 
     const response = await fetch(`${baseUrl}/ai/project-mentor`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-user-id': 'mentor-smoke-user' },
       body: JSON.stringify({
+        actorId: 'mentor-smoke-user',
+        sessionId: 'mentor-smoke-session',
         trigger: 'smoke',
         userPrompt: '문서 0건과 최근 활동을 반영해 현재 상태와 다음 액션을 정리해줘.',
         project: {
+          id: 'mentor-smoke-project',
+          founderId: 'mentor-smoke-user',
           title: 'WETHUS Commerce Hub',
           category: 'StartupBusiness',
           status: '진행 중',
@@ -137,6 +143,12 @@ function expectList(name, value, maxLength) {
     if (!String(payload?.reviewedAt || '').trim()) {
       fail('project mentor response should include reviewedAt');
     }
+    if (payload?.memory?.enabled !== true) {
+      fail('project mentor response should enable actor-scoped memory');
+    }
+    if (Number(payload?.memory?.stats?.nodes || 0) < 3) {
+      fail('project mentor response should persist graph nodes');
+    }
     expectList('nextActions', payload?.nextActions, 3);
     expectList('questions', payload?.questions, 2);
     expectList('toolActions', payload?.toolActions, 2);
@@ -144,6 +156,42 @@ function expectList(name, value, maxLength) {
     expectList('grounding', payload?.grounding, 4);
     if (Array.isArray(payload?.questions) && payload.questions.some((item) => String(item || '').includes('문서 0건과 최근 활동을 반영해'))) {
       fail('project mentor fallback should not leak internal auto-refresh prompts into user-facing questions');
+    }
+
+    const memoryResponse = await fetch(`${baseUrl}/ai/memory/graph?limit=100`, {
+      headers: { 'x-user-id': 'mentor-smoke-user' }
+    });
+    const memoryPayload = await memoryResponse.json().catch(() => ({}));
+    if (!memoryResponse.ok || !memoryPayload?.ok) {
+      fail('AI memory graph endpoint should return the actor graph');
+    }
+    if (!memoryPayload?.graph?.nodes?.some((node) => node.type === 'Project' && node.label === 'WETHUS Commerce Hub')) {
+      fail('AI memory graph should contain the project node');
+    }
+    if (!memoryPayload?.graph?.nodes?.some((node) => node.type === 'Message' && String(node.summary || '').includes('좋아요와 댓글'))) {
+      fail('AI memory graph should contain accessible project team chat');
+    }
+    if (!memoryPayload?.graph?.nodes?.some((node) => node.type === 'StatusSnapshot' && node.label === '진행 중')) {
+      fail('AI memory graph should contain the latest project status snapshot');
+    }
+    if (Number(memoryPayload?.graph?.stats?.episodes || 0) < 2) {
+      fail('AI memory graph should retain the user and assistant episodes');
+    }
+
+    const deleteResponse = await fetch(`${baseUrl}/ai/memory`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': 'mentor-smoke-user' }
+    });
+    const deletePayload = await deleteResponse.json().catch(() => ({}));
+    if (!deleteResponse.ok || deletePayload?.deleted !== true) {
+      fail('AI memory delete endpoint should forget the current actor graph');
+    }
+    const forgottenResponse = await fetch(`${baseUrl}/ai/memory/graph`, {
+      headers: { 'x-user-id': 'mentor-smoke-user' }
+    });
+    const forgottenPayload = await forgottenResponse.json().catch(() => ({}));
+    if (Number(forgottenPayload?.graph?.stats?.nodes || 0) !== 0) {
+      fail('deleted AI memory should not remain readable');
     }
   } catch (error) {
     fail(error.message || String(error));

@@ -561,7 +561,7 @@
         <header class="nh-ai-header">
           <div>
             <h2 class="nh-ai-title" id="nhAiTitle">WETHUS</h2>
-            <p class="nh-ai-status"><span class="nh-ai-status-dot" aria-hidden="true"></span>프로젝트 · 네트워크 문맥 연결됨</p>
+            <p class="nh-ai-status"><span class="nh-ai-status-dot" aria-hidden="true"></span>프로젝트 · 지식그래프 기억 연결됨</p>
           </div>
           <div class="nh-ai-header-actions">
             <button class="nh-icon-button" id="nhAiHistory" type="button" aria-label="대화 기록"><i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i></button>
@@ -574,13 +574,8 @@
         </div>
         <div class="nh-ai-messages" id="nhAiMessages" aria-live="polite"></div>
         <div class="nh-ai-composer">
-          <div class="nh-suggestions" aria-label="빠른 질문">
-            <button class="nh-chip-button" type="button" data-suggestion="이번 주 우선순위를 다시 정리해줘">우선순위 재정리</button>
-            <button class="nh-chip-button" type="button" data-suggestion="지금 우리 팀에 필요한 사람을 추천해줘">팀원 추천</button>
-            <button class="nh-chip-button" type="button" data-suggestion="최근 활동을 읽고 인사이트를 요약해줘">인사이트 요약</button>
-          </div>
           <form class="nh-chat-form" id="nhChatForm">
-            <input class="nh-chat-input" id="nhChatInput" maxlength="800" autocomplete="off" placeholder="WETHUS AI에게 물어보세요..." aria-label="WETHUS AI 메시지" />
+            <input class="nh-chat-input" id="nhChatInput" maxlength="800" autocomplete="off" placeholder="무엇이든 물어보세요" aria-label="WETHUS AI 메시지" />
             <button class="nh-attach-button" id="nhAttachButton" type="button" aria-label="파일 첨부"><i class="ph ph-paperclip" aria-hidden="true"></i></button>
             <button class="nh-send-button" id="nhSendButton" type="submit" aria-label="보내기"><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i></button>
             <input id="nhFileInput" type="file" hidden />
@@ -976,14 +971,6 @@
       more?.setAttribute('aria-expanded', 'false');
     }, { once: true });
 
-    document.querySelectorAll('[data-suggestion]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const chatInput = document.getElementById('nhChatInput');
-        if (!chatInput) return;
-        chatInput.value = button.dataset.suggestion || '';
-        chatInput.focus();
-      });
-    });
     document.getElementById('nhChatForm')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const chatInput = document.getElementById('nhChatInput');
@@ -1045,31 +1032,104 @@
     };
   }
 
+  function buildAgentMemoryContext() {
+    const state = window.WETHUS?.getState?.() || {};
+    const projects = dashboard.projects.filter((project) => project?.id).slice(0, 30);
+    const projectIds = new Set(projects.map((project) => String(project.id)));
+    const projectHubs = {};
+    for (const projectId of projectIds) {
+      projectHubs[projectId] = window.WETHUS?.getProjectHub?.(projectId) || state.projectHubs?.[projectId] || {};
+    }
+    const connections = window.WETHUS?.listConnections?.({ actorId: dashboard.actorId }) || [];
+    const relatedUserIds = new Set([
+      dashboard.actorId,
+      ...connections.map((item) => String(item?.targetUserId || '')).filter(Boolean),
+      ...projects.flatMap((project) => (Array.isArray(project?.teamMembers) ? project.teamMembers : []).map((member) => String(member?.id || ''))).filter(Boolean)
+    ]);
+    const users = (Array.isArray(state.users) ? state.users : [])
+      .filter((user) => relatedUserIds.has(String(user?.id || '')))
+      .map((user) => ({
+        id: user.id,
+        name: user.name,
+        nickname: user.nickname,
+        headline: user.headline,
+        bio: user.bio,
+        school: user.school,
+        major: user.major,
+        interestTags: user.interestTags,
+        skills: user.skills,
+        portfolioSummary: user.portfolioSummary || user.portfolioHighlights
+      }));
+    return {
+      actor: {
+        id: dashboard.actorId,
+        name: dashboard.user?.name,
+        nickname: dashboard.user?.nickname,
+        headline: dashboard.user?.headline,
+        bio: dashboard.user?.bio,
+        school: dashboard.user?.school,
+        major: dashboard.user?.major,
+        interestTags: dashboard.user?.interestTags,
+        skills: dashboard.user?.skills,
+        portfolioSummary: dashboard.user?.portfolioSummary || dashboard.user?.portfolioHighlights
+      },
+      users,
+      projects,
+      focusProject: dashboard.activeProject,
+      projectHubs,
+      connections,
+      events: window.WETHUS?.listSemanticEvents?.({ actorId: dashboard.actorId, limit: 300 }) || []
+    };
+  }
+
+  function buildCurrentStatusSnapshot(project, hub) {
+    const recentActivity = (Array.isArray(hub?.recentActivities) ? hub.recentActivities : [])
+      .find((item) => String(item?.text || item?.summary || '').trim());
+    const nextTodo = (Array.isArray(hub?.weeklyTodos) ? hub.weeklyTodos : [])
+      .find((item) => typeof item === 'string' || !['done', 'completed'].includes(String(item?.status || '').toLowerCase()));
+    const blockers = Array.isArray(hub?.blockers) ? hub.blockers : [];
+    const stableDay = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    return {
+      project_id: project?.id,
+      current_stage: project?.status || project?.phase || '진행 중',
+      recent_activity_summary: String(recentActivity?.text || recentActivity?.summary || '').trim(),
+      recent_activity_at: recentActivity?.createdAt || recentActivity?.occurredAt || '',
+      blocker_summary: String(hub?.blocker || blockers[0]?.text || blockers[0]?.summary || blockers[0] || '').trim(),
+      suggested_next_action: String(typeof nextTodo === 'string' ? nextTodo : nextTodo?.title || '').trim(),
+      activity_health: recentActivity ? 'active' : 'idle',
+      updated_at: recentActivity?.createdAt || recentActivity?.occurredAt || project?._updatedAt || project?.updatedAt || stableDay
+    };
+  }
+
   async function requestProjectMentor(prompt, attachment) {
-    if (previewMode || !dashboard.activeProject?.id) {
+    if (!dashboard.activeProject?.id || (previewMode && !isLocal)) {
       await new Promise((resolve) => setTimeout(resolve, 620));
       return fallbackAiReply(prompt);
     }
     const localBases = [`${location.protocol}//${location.hostname}:8787`, 'http://127.0.0.1:8787', 'http://localhost:8787'];
     const remoteBase = String(window.WETHUS_API_BASE || 'https://wethus-api.onrender.com').replace(/\/$/, '');
     const bases = Array.from(new Set((isLocal ? [...localBases, remoteBase] : [remoteBase]).filter(Boolean)));
+    const activeHub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {};
     const payload = {
       project: dashboard.activeProject,
-      hub: window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {},
+      hub: activeHub,
       events: window.WETHUS?.listSemanticEvents?.({ projectId: dashboard.activeProject.id, limit: 30 }) || [],
       insights: [],
-      statusSnapshot: {},
+      statusSnapshot: buildCurrentStatusSnapshot(dashboard.activeProject, activeHub),
       trigger: 'network-home-chat',
       userPrompt: prompt,
-      attachment: attachment || null
+      attachment: attachment || null,
+      actorId: dashboard.actorId,
+      sessionId: chatStorageKey(),
+      memoryContext: buildAgentMemoryContext()
     };
     let lastError;
     for (const base of bases) {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), isLocal ? 8000 : 6000);
+      const timeout = window.setTimeout(() => controller.abort(), isLocal ? 70000 : 10000);
       try {
         const headers = { 'Content-Type': 'application/json' };
-        if (window.WETHUS_SEND_EXPLICIT_ACTOR === true && dashboard.actorId) headers['x-user-id'] = dashboard.actorId;
+        if (dashboard.actorId && (isLocal || window.WETHUS_SEND_EXPLICIT_ACTOR === true)) headers['x-user-id'] = dashboard.actorId;
         const response = await fetch(`${base}/ai/project-mentor`, {
           method: 'POST',
           credentials: 'include',
@@ -1120,7 +1180,7 @@
       const currentHub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {};
       const teamChat = [
         ...(Array.isArray(currentHub.teamChat) ? currentHub.teamChat : []),
-        { id: userMessage.id, from: userLabel(dashboard.user), kind: 'human', text: prompt, createdAt: userMessage.createdAt }
+        { id: userMessage.id, from: userLabel(dashboard.user), kind: 'human', channel: 'ai_mentor', text: prompt, createdAt: userMessage.createdAt }
       ].slice(-120);
       dashboard.hub = window.WETHUS?.upsertProjectHub?.(dashboard.activeProject.id, { teamChat }) || currentHub;
     }
@@ -1146,7 +1206,7 @@
         const raw = response.raw || {};
         const teamChat = [
           ...(Array.isArray(currentHub.teamChat) ? currentHub.teamChat : []),
-          { id: assistantMessage.id, from: 'WETHUS AI', kind: 'ai', text: [assistantMessage.text, ...(assistantMessage.items || [])].join('\n'), createdAt: assistantMessage.createdAt }
+          { id: assistantMessage.id, from: 'WETHUS AI', kind: 'ai', channel: 'ai_mentor', text: [assistantMessage.text, ...(assistantMessage.items || [])].join('\n'), createdAt: assistantMessage.createdAt }
         ].slice(-120);
         dashboard.hub = window.WETHUS?.upsertProjectHub?.(dashboard.activeProject.id, {
           teamChat,

@@ -33,9 +33,12 @@ cp .env.example .env
   - `AI_PROVIDER=openai` is recommended.
   - `OPENAI_API_KEY=...`
   - `OPENAI_MODEL=gpt-4o-mini`
-  - Local moderation option: `AI_PROVIDER=ollama`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`, `OLLAMA_MODEL=llama3.2:3b`
+  - Local moderation and mentor option: `AI_PROVIDER=ollama`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`, `OLLAMA_MODEL=llama3.2:3b`
+  - `OLLAMA_KEEP_ALIVE=10m` keeps the selected local model warm between mentor requests.
+  - `AI_MEMORY_REQUIRE_SESSION=true` requires the authenticated session subject to match the requested memory actor. It defaults to `true` in production and can be disabled only for isolated local QA.
   - Fallback: `AI_PROVIDER=gemini` with `GEMINI_API_KEY=...`
-  - Local WETHUS AI chat also uses the same backend `/ai/chat` route, so when the frontend is opened on `localhost` it can use the Ollama-backed runtime without browser API keys.
+  - The authenticated Network home uses `/ai/project-mentor`, which recalls the user's WETHUS knowledge graph before generation and stores the question and answer as new memory episodes.
+  - Local WETHUS AI chat also uses the backend AI routes, so when the frontend is opened on `localhost` it can use the Ollama-backed runtime without browser API keys.
 
 ## Local LLM quick start
 ```bash
@@ -48,6 +51,8 @@ Set:
 AI_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.2:3b
+OLLAMA_KEEP_ALIVE=10m
+AI_MEMORY_REQUIRE_SESSION=false
 ```
 
 If your local Ollama has a different installed model, replace `OLLAMA_MODEL` with that exact name from:
@@ -79,6 +84,7 @@ window.WETHUS_GOOGLE_AUTH_ENDPOINT = 'http://localhost:8787/auth/google';
 - Google ID tokens are verified on the server.
 - Password and Google login responses set an HTTP-only `wethus_session` cookie.
 - OAuth and integration access/refresh tokens are stored encrypted at rest with `TOKEN_ENCRYPTION_KEY`; API responses strip raw and encrypted token fields before returning integration rows to the browser.
+- Agent memory is isolated by a one-way actor scope key, keeps temporal validity and provenance on nodes and edges, and excludes passwords, session tokens, OAuth secrets, and raw email addresses. Account export and deletion include this memory store.
 - `/health` exposes non-secret build and security-flag status so production drift can be diagnosed quickly.
 - API responses include baseline security headers.
 - Auth, AI, webhook, and metadata fetch endpoints use in-memory rate limits.
