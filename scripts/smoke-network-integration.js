@@ -61,6 +61,7 @@ function validateFrontendContracts() {
   const member = fs.readFileSync(path.join(appRoot, 'member.html'), 'utf8');
   const checks = [
     [app.includes('function refreshNetworkPeople('), 'public people refresh contract missing'],
+    [app.includes('function mergeConnectionRecords(') && app.includes("status: 'cancelled'"), 'connection tombstone merge contract missing'],
     [app.includes('function addProjectTask(') && app.includes('function setProjectTaskCompleted('), 'shared project task contract missing'],
     [app.includes('function addProjectScheduleItem('), 'shared project schedule contract missing'],
     [home.includes("projectHubHref({ tab: 'overview', focus: 'tasks'"), 'home-to-hub task deep link missing'],
@@ -75,9 +76,18 @@ function validateFrontendContracts() {
 }
 
 (async () => {
+  const leaderFixture = actorState('leader-smoke', 'Leader Smoke', 'leader-smoke@example.com');
+  leaderFixture.state.connections.push({
+    id: 'cancelled-connection-tombstone',
+    actorId: 'leader-smoke',
+    targetUserId: 'researcher-smoke',
+    status: 'cancelled',
+    createdAt: '2026-08-14T00:00:00.000Z',
+    updatedAt: '2026-08-14T00:01:00.000Z'
+  });
   fs.writeFileSync(path.join(dataDir, 'cloud-state.json'), JSON.stringify({
     states: [
-      actorState('leader-smoke', 'Leader Smoke', 'leader-smoke@example.com'),
+      leaderFixture,
       actorState('researcher-smoke', 'Researcher Smoke', 'researcher-smoke@example.com')
     ]
   }, null, 2));
@@ -109,6 +119,9 @@ function validateFrontendContracts() {
     if (!people.people?.some((person) => person.id === 'researcher-smoke')) fail('people directory should expose the other public account');
     if (JSON.stringify(people).includes('researcher-smoke@example.com')) fail('people directory must not expose email addresses');
 
+    const initialConnections = await request('/network/connections', 'leader-smoke');
+    if (initialConnections.outgoing?.some((item) => item.id === 'cancelled-connection-tombstone')) fail('connection API must hide cancellation tombstones');
+
     const requestId = 'connection-smoke-request';
     const created = await request('/network/connections/toggle', 'leader-smoke', {
       method: 'POST',
@@ -132,6 +145,8 @@ function validateFrontendContracts() {
     });
     const cancelled = await request('/network/connections', 'researcher-smoke');
     if (cancelled.incoming?.some((item) => item.id === requestId)) fail('cancelling a connection should remove the target request');
+    const cancelledSender = await request('/network/connections', 'leader-smoke');
+    if (cancelledSender.outgoing?.some((item) => item.id === requestId)) fail('cancelling a connection should remove the sender request');
 
     const mentor = await request('/ai/project-mentor', 'leader-smoke', {
       method: 'POST',

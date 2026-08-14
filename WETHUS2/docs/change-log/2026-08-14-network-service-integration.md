@@ -11,6 +11,7 @@
 - Project tasks use one stable task model across the home and project hub, including completion state and deep-link focus.
 - Project schedule entries use one shared project-hub state across the home calendar, Network schedule, and the new project-hub schedule card.
 - Network people and connection requests use actor-scoped backend routes. Public directory responses exclude email and private auth fields.
+- Connection cancellation is retained as a local sync tombstone, merged by connection pair and latest timestamp, and hidden from UI, API responses, and AI memory so stale cloud state cannot resurrect a cancelled request.
 - Recommended people open the existing public member profile by user ID and support connection or DM follow-up.
 - ASK/OFFER posts, connection requests, task updates, schedule updates, and AI actions write semantic activity events.
 

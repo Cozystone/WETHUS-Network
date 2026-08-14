@@ -927,11 +927,14 @@
     if (!targetId || targetId === String(actorId)) throw new Error('연결할 사용자를 확인해주세요.');
     s.connections = Array.isArray(s.connections) ? s.connections : [];
     const index = s.connections.findIndex((item) => String(item?.actorId || '') === String(actorId) && String(item?.targetUserId || '') === targetId);
+    const existing = index >= 0 ? s.connections[index] : null;
+    const existingStatus = String(existing?.status || 'requested').toLowerCase();
+    const existingIsActive = !!existing && !['cancelled', 'declined'].includes(existingStatus);
     let connected = false;
     let row = null;
-    if (index >= 0) {
-      row = s.connections[index];
-      s.connections.splice(index, 1);
+    if (existingIsActive) {
+      row = { ...existing, status: 'cancelled', updatedAt: new Date().toISOString() };
+      s.connections[index] = row;
       appendSemanticEvent(s, {
         actorId,
         action: 'connection_cancelled',
@@ -940,8 +943,18 @@
         visibility: 'private'
       });
     } else {
-      row = { id: uid(), actorId, targetUserId: targetId, status: 'requested', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-      s.connections.unshift(row);
+      const now = new Date().toISOString();
+      row = {
+        ...(existing || {}),
+        id: existing?.id || uid(),
+        actorId,
+        targetUserId: targetId,
+        status: 'requested',
+        createdAt: existing?.createdAt || now,
+        updatedAt: now
+      };
+      if (index >= 0) s.connections[index] = row;
+      else s.connections.unshift(row);
       connected = true;
       appendSemanticEvent(s, {
         actorId,
@@ -965,10 +978,12 @@
     const s = load();
     const actorId = String(options.actorId || s.currentUserId || '').trim();
     const direction = String(options.direction || 'outgoing').toLowerCase();
+    const includeInactive = options.includeInactive === true;
+    const activeOnly = (rows) => (Array.isArray(rows) ? rows : []).filter((item) => includeInactive || !isInactiveConnection(item));
     if (direction === 'incoming') {
-      return (s.incomingConnections || []).filter((item) => !actorId || String(item?.targetUserId || '') === actorId);
+      return activeOnly(s.incomingConnections).filter((item) => !actorId || String(item?.targetUserId || '') === actorId);
     }
-    return (s.connections || []).filter((item) => !actorId || String(item?.actorId || '') === actorId);
+    return activeOnly(s.connections).filter((item) => !actorId || String(item?.actorId || '') === actorId);
   }
 
   function respondToConnection(requestId, status) {
@@ -1005,10 +1020,19 @@
         if (!response.ok) continue;
         const payload = await response.json().catch(() => ({}));
         const s = load();
-        if (Array.isArray(payload?.outgoing)) s.connections = payload.outgoing;
-        if (Array.isArray(payload?.incoming)) s.incomingConnections = payload.incoming;
+        if (Array.isArray(payload?.outgoing)) {
+          const localTombstones = (s.connections || []).filter(isInactiveConnection);
+          s.connections = mergeConnectionRecords(payload.outgoing, localTombstones);
+        }
+        if (Array.isArray(payload?.incoming)) {
+          const localTombstones = (s.incomingConnections || []).filter(isInactiveConnection);
+          s.incomingConnections = mergeConnectionRecords(payload.incoming, localTombstones);
+        }
         save(s);
-        return { outgoing: s.connections || [], incoming: s.incomingConnections || [] };
+        return {
+          outgoing: listConnections({ direction: 'outgoing' }),
+          incoming: listConnections({ direction: 'incoming' })
+        };
       } catch (_) {}
     }
     return {
@@ -1499,6 +1523,35 @@
     return Array.from(map.values());
   }
 
+  function isInactiveConnection(item) {
+    return ['cancelled', 'declined'].includes(String(item?.status || '').toLowerCase());
+  }
+
+  function mergeConnectionRecords(remoteItems, localItems) {
+    const map = new Map();
+    const add = (item, sourcePriority) => {
+      if (!item || typeof item !== 'object') return;
+      const actorId = String(item.actorId || '').trim();
+      const targetUserId = String(item.targetUserId || item.peerId || '').trim();
+      const key = actorId && targetUserId
+        ? `${actorId}:${targetUserId}`
+        : String(item.id || '').trim();
+      if (!key) return;
+      const timestamp = Date.parse(item.updatedAt || item.createdAt || '') || 0;
+      const previous = map.get(key);
+      if (!previous || timestamp > previous.timestamp || (timestamp === previous.timestamp && sourcePriority >= previous.sourcePriority)) {
+        map.set(key, {
+          item: previous ? { ...previous.item, ...item } : { ...item },
+          timestamp,
+          sourcePriority
+        });
+      }
+    };
+    (Array.isArray(remoteItems) ? remoteItems : []).forEach((item) => add(item, 0));
+    (Array.isArray(localItems) ? localItems : []).forEach((item) => add(item, 1));
+    return Array.from(map.values()).map((entry) => entry.item);
+  }
+
   function mergeAccountState(localState, remoteState) {
     const local = localState && typeof localState === 'object' ? localState : {};
     const remote = remoteState && typeof remoteState === 'object' ? remoteState : {};
@@ -1517,8 +1570,8 @@
       semanticEvents: mergeRecordsByKey(remote.semanticEvents, local.semanticEvents, (event) => String(event?.id || '')),
       asks: mergeRecordsByKey(remote.asks, local.asks, (ask) => String(ask?.id || '')),
       offers: mergeRecordsByKey(remote.offers, local.offers, (offer) => String(offer?.id || '')),
-      connections: mergeRecordsByKey(remote.connections, local.connections, (connection) => String(connection?.id || `${connection?.actorId || ''}:${connection?.targetUserId || ''}`)),
-      incomingConnections: mergeRecordsByKey(remote.incomingConnections, local.incomingConnections, (connection) => String(connection?.id || `${connection?.actorId || ''}:${connection?.targetUserId || ''}`)),
+      connections: mergeConnectionRecords(remote.connections, local.connections),
+      incomingConnections: mergeConnectionRecords(remote.incomingConnections, local.incomingConnections),
       projectViews: mergeRecordsByKey(remote.projectViews, local.projectViews, (view) => String(view?.id || '')),
       currentUserId: local.currentUserId || remote.currentUserId || null
     };

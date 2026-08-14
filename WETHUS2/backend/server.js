@@ -1503,6 +1503,10 @@ function networkConnectionNotification({ id, type, title, body }) {
   };
 }
 
+function isActiveNetworkConnection(item) {
+  return !['cancelled', 'declined'].includes(String(item?.status || '').toLowerCase());
+}
+
 function buildAgentMemorySnapshot(actorId, payload = {}) {
   const backendUser = getUserById(actorId);
   const clientMemory = payload?.memoryContext && typeof payload.memoryContext === 'object'
@@ -1570,7 +1574,8 @@ function buildAgentMemorySnapshot(actorId, payload = {}) {
   const cloudConnections = Array.isArray(cloudState?.connections) ? cloudState.connections : [];
   const clientConnections = Array.isArray(clientMemory?.connections) ? clientMemory.connections : [];
   const connections = mergeRowsById(cloudConnections, clientConnections)
-    .filter((item) => String(item?.actorId || actorId) === String(actorId));
+    .filter((item) => String(item?.actorId || actorId) === String(actorId))
+    .filter(isActiveNetworkConnection);
   const connectedIds = new Set(connections.map((item) => String(item?.targetUserId || item?.peerId || '')).filter(Boolean));
   const users = mergeRowsById(cloudUsers, clientUsers)
     .filter((user) => String(user?.id || '') === String(actorId) || connectedIds.has(String(user?.id || '')));
@@ -6039,9 +6044,11 @@ app.get('/network/connections', networkRateLimit, (req, res) => {
     if (!context) return;
     const state = context.row?.state || {};
     const outgoing = (Array.isArray(state?.connections) ? state.connections : [])
-      .filter((item) => String(item?.actorId || '') === context.actorId);
+      .filter((item) => String(item?.actorId || '') === context.actorId)
+      .filter(isActiveNetworkConnection);
     const incoming = (Array.isArray(state?.incomingConnections) ? state.incomingConnections : [])
-      .filter((item) => String(item?.targetUserId || '') === context.actorId);
+      .filter((item) => String(item?.targetUserId || '') === context.actorId)
+      .filter(isActiveNetworkConnection);
     return res.json({ ok: true, outgoing, incoming });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || 'network connections failed' });
