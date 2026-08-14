@@ -625,7 +625,7 @@
             ${buildProfileCard()}
             ${buildCalendarCard()}
           </div>
-          <div class="nh-center-column">
+          <div class="nh-center-column" tabindex="0" aria-label="프로젝트 홈 중앙 콘텐츠">
             ${buildHero()}
             ${buildPeople()}
             ${buildWork()}
@@ -856,6 +856,27 @@
   }
 
   function bindInteractions() {
+    const centerColumn = document.querySelector('.nh-center-column');
+    centerColumn?.addEventListener('keydown', (event) => {
+      if (event.target !== centerColumn) return;
+
+      const pageStep = Math.max(180, Math.round(centerColumn.clientHeight * 0.72));
+      let nextTop = null;
+      if (event.key === 'PageDown' || (event.key === ' ' && !event.shiftKey)) {
+        nextTop = centerColumn.scrollTop + pageStep;
+      } else if (event.key === 'PageUp' || (event.key === ' ' && event.shiftKey)) {
+        nextTop = centerColumn.scrollTop - pageStep;
+      } else if (event.key === 'Home') {
+        nextTop = 0;
+      } else if (event.key === 'End') {
+        nextTop = centerColumn.scrollHeight;
+      }
+
+      if (nextTop === null) return;
+      event.preventDefault();
+      centerColumn.scrollTo({ top: nextTop, behavior: 'smooth' });
+    });
+
     document.getElementById('nhHeroPrev')?.addEventListener('click', () => {
       dashboard.slideIndex = (dashboard.slideIndex - 1 + dashboard.slides.length) % dashboard.slides.length;
       renderHeroSlide();
@@ -1180,6 +1201,7 @@
     await restoreSessionIfNeeded();
     if (!actorId()) return;
     if (previewMode) ensurePreviewData();
+    window.WETHUS.refreshGlobalNav?.();
     hydrateDashboard();
     renderShell();
   }

@@ -127,7 +127,7 @@ body.network-home-mode > #applyModal {
   gap: 14px;
   width: min(96vw, 1600px);
   height: calc(100vh - var(--nh-existing-nav-height, 62px));
-  min-height: 690px;
+  min-height: 0;
   margin: 0 auto;
   padding: 16px 0 20px;
 }
@@ -256,9 +256,17 @@ body.network-home-mode > #applyModal {
   border: 0;
   background: transparent;
   color: var(--nh-muted);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11.5px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.nh-link-button i {
+  flex: 0 0 auto;
+  font-size: 13px;
 }
 
 .nh-link-button:hover {
@@ -725,11 +733,14 @@ body.network-home-mode > #applyModal {
 
 .nh-connect-button {
   width: 100%;
-  min-height: 36px;
+  min-height: 35px;
   margin-top: auto;
   gap: 6px;
+  padding: 0 8px;
   color: #ececea;
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .nh-connect-button.is-connected {
@@ -900,21 +911,26 @@ body.network-home-mode > #applyModal {
 }
 
 .nh-add-task-button {
+  display: inline-flex;
   width: fit-content;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
   margin-top: auto;
-  padding: 6px 10px 1px 8px;
+  padding: 6px 10px;
   border: 0;
   background: transparent;
   color: var(--nh-orange-bright);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .nh-add-task-button i {
-  margin-right: 9px;
-  font-size: 20px;
-  vertical-align: -2px;
+  margin: 0;
+  font-size: 18px;
 }
 
 .nh-task-adder {
@@ -967,6 +983,10 @@ body.network-home-mode > #applyModal {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.nh-ai-header > div:first-child {
+  min-width: 0;
+}
+
 .nh-ai-title {
   margin: 0;
   font-size: 18px;
@@ -982,6 +1002,9 @@ body.network-home-mode > #applyModal {
   color: #b6b8ba;
   font-size: 11px;
   font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nh-ai-status-dot {
@@ -1177,31 +1200,41 @@ body.network-home-mode > #applyModal {
 }
 
 .nh-ai-composer {
-  padding: 11px 15px 13px;
+  flex: 0 0 auto;
+  padding: 10px 12px 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(10, 12, 14, 0.72);
 }
 
 .nh-suggestions {
-  display: flex;
-  gap: 7px;
-  overflow-x: auto;
-  padding-bottom: 9px;
-  scrollbar-width: none;
-}
-
-.nh-suggestions::-webkit-scrollbar {
-  display: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  padding-bottom: 8px;
 }
 
 .nh-chip-button {
+  width: 100%;
+  min-width: 0;
   min-height: 31px;
-  flex: 0 0 auto;
-  padding: 0 10px;
+  padding: 0 4px;
   border-radius: 9px;
   color: #d7d8d8;
   font-size: 10px;
-  font-weight: 760;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.nh-chip-button:first-child {
+  grid-column: 1 / -1;
+}
+
+.nh-center-column:focus-visible {
+  outline: 2px solid rgba(255, 129, 46, 0.72);
+  outline-offset: -2px;
+  border-radius: var(--nh-radius);
 }
 
 .nh-chat-form {
@@ -1335,6 +1368,48 @@ body.network-home-mode > #applyModal {
     padding-left: 18px;
   }
 
+  .nh-divider {
+    margin: 18px 0 15px;
+  }
+
+  .nh-section-heading {
+    gap: 8px;
+  }
+
+  .nh-schedule-list {
+    gap: 10px;
+    margin-top: 13px;
+  }
+
+  .nh-schedule-item {
+    grid-template-columns: 30px 38px minmax(0, 1fr) 5px;
+    gap: 6px;
+  }
+
+  .nh-schedule-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+    font-size: 15px;
+  }
+
+  .nh-schedule-time {
+    font-size: 12.5px;
+  }
+
+  .nh-schedule-copy strong {
+    display: -webkit-box;
+    font-size: 12.5px;
+    line-height: 1.25;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .nh-schedule-copy span {
+    font-size: 10.5px;
+  }
+
   .nh-profile-head {
     grid-template-columns: 76px minmax(0, 1fr);
     gap: 14px;
@@ -1363,17 +1438,42 @@ body.network-home-mode > #applyModal {
   }
 }
 
-@media (max-height: 820px) and (min-width: 861px) {
+@media (min-width: 1181px) {
   body.network-home-mode {
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .nh-shell {
-    overflow: visible;
+    overflow: hidden;
   }
 
-  .nh-dashboard-grid {
-    height: 790px;
+  .nh-left-column,
+  .nh-center-column {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+    scrollbar-width: thin;
+  }
+
+  .nh-left-column::-webkit-scrollbar,
+  .nh-center-column::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .nh-left-column::-webkit-scrollbar-thumb,
+  .nh-center-column::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  .nh-left-column::-webkit-scrollbar-track,
+  .nh-center-column::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .nh-ai-panel {
+    height: 100%;
+    align-self: stretch;
   }
 }
 

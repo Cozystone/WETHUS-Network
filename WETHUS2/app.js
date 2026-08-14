@@ -3626,13 +3626,6 @@
       }
 
       const state = getState();
-      if (state.devMode && !Array.from(nav.querySelectorAll('a')).some(a => (a.textContent || '').includes('WETHUS 1.0'))) {
-        const legacy = document.createElement('a');
-        legacy.href = 'explore_theme.html?cat=All';
-        legacy.className = 'nav-link';
-        legacy.textContent = 'WETHUS 1.0';
-        nav.appendChild(legacy);
-      }
 
       // 기존 로그인 링크는 로그인 상태에서 숨긴다 (로그아웃은 프로필 드롭다운으로 통합)
       const authLink = nav.querySelector('.js-auth-link');
@@ -4006,6 +3999,7 @@
     listNotifications,
     unreadNotificationCount,
     refreshNavBadges,
+    refreshGlobalNav: initNotificationNav,
     showTopToast,
     setAuthReturnState,
     consumeAuthReturnState,

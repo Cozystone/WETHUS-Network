@@ -35,8 +35,11 @@
 
 ## Interaction Verification
 
-- Existing profile dropdown and quick-menu drawer opened successfully from the preserved global header on both local and deployed previews.
+- Existing profile chip and quick-menu drawer remain available from the preserved global header; the quick-menu open/close states were rechecked after removing the `WETHUS 1.0` development link.
 - Hero carousel, connection request toggle, work completion, calendar navigation, AI conversation, and AI action application were exercised during implementation.
+- At 1280 x 720 the page remains fixed to the viewport while the center workspace scrolls independently (`155 px` observed after `PageDown`); the left rail and document stay at scroll position `0`.
+- `우선순위 재정리`, `팀원 추천`, `인사이트 요약`, `연결`, `새 작업 추가`, `전체 보기`, and `더 보기` all pass measured width/height overflow checks.
+- The AI composer bottom remains at `699 px` in a `720 px` viewport and the layout has no horizontal overflow.
 - Test-created connection and chat state were returned to the default preview state.
 - Browser console error log: empty.
 
@@ -45,6 +48,8 @@
 - Earlier P1: the new dashboard rendered a second standalone topbar and hid the existing WETHUS header, duplicating the logo/navigation and dropping established account/menu behavior.
 - Fix: stopped hiding `body > .nav`, removed the generated topbar from dashboard rendering, removed the outer app-frame border/radius, reused the existing wordmark target, and synchronized dashboard height to the existing header.
 - Post-fix evidence: zero `.nh-topbar` nodes, original header controls visible and interactive, header bottom and dashboard grid top both at 63 px, and no horizontal overflow.
+- Latest P1: removing the development-only `WETHUS 1.0` link also removed a shared navigation state initialization and prevented the profile controls from mounting in preview mode.
+- Fix: restored only the shared state initialization, exposed the existing idempotent navigation refresh to the authenticated dashboard, and kept the legacy link removed.
 - Current P0/P1/P2 findings: none.
 
 ## Follow-Up Polish
