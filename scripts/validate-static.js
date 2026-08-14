@@ -89,14 +89,14 @@ function validateRenderBlueprint() {
     'OPENAI_API_KEY'
   ];
   for (const key of secretKeys) {
-    const blockMatch = text.match(new RegExp(`-\\s+key:\\s*${key}\\n((?:\\s{8}.+\\n?)*)`));
+    const blockMatch = text.match(new RegExp(`-\\s+key:\\s*${key}\\r?\\n((?:\\s{8}.+\\r?\\n?)*)`));
     const block = blockMatch ? blockMatch[0] : '';
     if (!block) {
       fail(`render.yaml must declare secret ${key}`);
       continue;
     }
     if (!/sync:\s*false/.test(block)) fail(`render.yaml secret ${key} must use sync: false`);
-    if (/\n\s+value:\s*/.test(block)) fail(`render.yaml secret ${key} must not have a committed value`);
+    if (/\r?\n\s+value:\s*/.test(block)) fail(`render.yaml secret ${key} must not have a committed value`);
   }
 }
 

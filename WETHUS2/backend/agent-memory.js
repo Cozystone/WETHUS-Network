@@ -323,7 +323,10 @@ function addProject(scope, actorId, project, hub, now) {
   for (const material of materials.slice(0, 40)) {
     const name = text(material?.name || material?.title || material, 240);
     if (!name) continue;
-    const resourceId = stableId('resource', id, material?.id || material?.url || name);
+    const materialIdentity = String(material?.source || '') === 'network-home-ai'
+      ? `${name}:${text(material?.snippet || material?.description, 240)}`
+      : (material?.id || material?.url || name);
+    const resourceId = stableId('resource', id, materialIdentity);
     upsertNode(scope, {
       id: resourceId,
       type: 'Resource',

@@ -53,7 +53,7 @@
   </footer>
 
 
-  <script src="app.js?v=20260624-integrations-2"></script>
+  <script src="app.js?v=20260814-service-integration-5"></script>
   <script>
     const authLink = document.querySelector('.js-auth-link');
     const state = WETHUS.getState();
@@ -150,9 +150,16 @@
         subnav.dataset.bound = 'true';
       }
     }
+    const requestedUserId = String(params.get('userId') || '').trim();
     const stateUsers = Array.isArray(WETHUS.getState()?.users) ? WETHUS.getState().users : [];
-    const matchedUser = stateUsers.find((candidate) => {
+    const networkUsers = WETHUS.listNetworkPeople ? WETHUS.listNetworkPeople() : [];
+    const directoryUsers = [...stateUsers, ...networkUsers].reduce((map, candidate) => {
+      if (candidate?.id) map.set(String(candidate.id), { ...(map.get(String(candidate.id)) || {}), ...candidate });
+      return map;
+    }, new Map());
+    const matchedUser = Array.from(directoryUsers.values()).find((candidate) => {
       if (!candidate) return false;
+      if (requestedUserId && String(candidate.id || '') === requestedUserId) return true;
       return [candidate.name, candidate.nickname].some((value) => String(value || '').trim() === String(member.name || '').trim());
     }) || null;
     const resolvedMember = matchedUser ? {
@@ -175,6 +182,10 @@
       profileImage: matchedUser.profileImage || '',
       userId: matchedUser.id || ''
     } : { ...member, nickname: member.name.replace(/\s+/g,'').toLowerCase(), startupBelief: '' };
+    member.name = resolvedMember.name || member.name;
+    member.role = resolvedMember.headline || member.role;
+    member.bio = resolvedMember.bio || member.bio;
+    member.founder = resolvedMember.founder || member.founder;
     if (resolvedMember.userId && WETHUS.recordProfileView) {
       WETHUS.recordProfileView(resolvedMember.userId);
     }
@@ -185,7 +196,7 @@
     const myTeamNames = new Set((WETHUS.myProjects() || []).flatMap(p => (p.teamMembers || []).map(m => m.name)));
     const canViewDetail = true;
 
-    const mentorBadge = member.mentor ? '<span class="verify-badge" style="background:#6d28d9;color:#f5f3ff;border-color:#8b5cf6;">Mentor 인증</span>' : '';
+    const mentorBadge = resolvedMember.mentor ? '<span class="verify-badge" style="background:#6d28d9;color:#f5f3ff;border-color:#8b5cf6;">Mentor 인증</span>' : '';
     document.getElementById('memberHero').innerHTML = `
       <div class="profile-avatar">${esc(member.name.slice(0,1))}</div>
       <div class="profile-main">
@@ -193,8 +204,8 @@
           <div>
             <h2>${esc(member.name)}</h2>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <span class="profile-nickname">@${esc(member.name.replace(/\s+/g,'').toLowerCase())}</span>
-              ${member.founder ? '<span class="verify-badge">Founder 인증</span>' : ''}
+              <span class="profile-nickname">@${esc(resolvedMember.nickname || member.name.replace(/\s+/g,'').toLowerCase())}</span>
+              ${resolvedMember.founder ? '<span class="verify-badge">Founder 인증</span>' : ''}
               ${mentorBadge}
             </div>
           </div>
@@ -636,6 +647,11 @@
       const likesReceived = founderProjects.reduce((sum, project) => sum + Number(project?.likes || 0), 0);
       const commentsReceived = founderProjects.reduce((sum, project) => sum + (Array.isArray(project?.comments) ? project.comments.length : 0), 0);
       const reactionCount = likesReceived + commentsReceived;
+      const memberFollowerCount = Number(
+        resolvedMember.userId && WETHUS.getProfileFollowStats
+          ? WETHUS.getProfileFollowStats(resolvedMember.userId)?.followers || 0
+          : 0
+      );
       const highlightLines = String(resolvedMember.portfolioHighlights || '').split('\n').map((line) => line.replace(/^[•\-]\s*/, '').trim()).filter(Boolean);
       const latestPortfolioDate = resolvedMember.profileUpdatedAt || currentProjects[0]?.updatedAt || currentProjects[0]?.createdAt || resolvedMember.createdAt || '';
       const memberRecordLead = resolvedMember.bio || resolvedMember.startupBelief || '이 창업자가 어떤 문제를 왜 붙잡고 있는지 읽는 프로필 기록 영역입니다.';

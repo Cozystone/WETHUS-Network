@@ -25,6 +25,12 @@
 - Latest confirmed checks: GitHub Static checks success, GitHub Production smoke success.
 - Local worktree should be clean before starting new work.
 
+## Network OS Development
+- Active Network OS development is in `C:\0.ASKIM ALL-VIN\0.6.WETHUS-Network` on `codex/network-os-integration`.
+- The production-connected repository at `C:\0.ASKIM ALL-VIN\0.5.WETHUS` must remain untouched unless the user explicitly asks to merge or deploy.
+- The signed-in home is the integrated entry point for shared project tasks, schedules, people/connection discovery, public profiles, and WETHUS AI.
+- WETHUS AI uses the local Ollama model plus an actor-scoped temporal knowledge graph. Attached documents are interpreted as evidence before they are combined with the wider project context.
+
 ## Recent Security/Operations Work
 - Removed client-exposed secrets and plaintext local auth storage.
 - Hardened backend auth, admin bootstrap, JWT secret requirements, cookies, and password hashing.

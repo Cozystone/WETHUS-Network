@@ -2,6 +2,7 @@
 (function () {
   const KEY = 'wethus_v1';
   const GLOBAL_PROJECTS_KEY = 'wethus_global_projects_v1';
+  const NETWORK_PEOPLE_KEY = 'wethus_network_people_v1';
   const DEFAULT_GEMINI_KEY = '';
   const DEFAULT_OPENAI_KEY = '';
   const ADMIN_MODE_USER_ID = 'admin-mode';
@@ -489,6 +490,7 @@
         asks: [],
         offers: [],
         connections: [],
+        incomingConnections: [],
         geminiApiKey: ''
       };
       localStorage.setItem(KEY, JSON.stringify(init));
@@ -523,6 +525,7 @@
     if (!Array.isArray(parsed.asks)) parsed.asks = [];
     if (!Array.isArray(parsed.offers)) parsed.offers = [];
     if (!Array.isArray(parsed.connections)) parsed.connections = [];
+    if (!Array.isArray(parsed.incomingConnections)) parsed.incomingConnections = [];
 
     if (!Array.isArray(parsed.projects)) parsed.projects = [];
     let changed = false;
@@ -814,6 +817,108 @@
       .sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0));
   }
 
+  function publicNetworkPerson(user = {}) {
+    const id = String(user?.id || '').trim();
+    if (!id) return null;
+    return {
+      id,
+      name: String(user?.name || user?.nickname || 'WETHUS 사용자').trim(),
+      nickname: String(user?.nickname || '').trim(),
+      headline: String(user?.headline || '').trim(),
+      bio: String(user?.bio || '').trim(),
+      school: String(user?.school || '').trim(),
+      major: String(user?.major || '').trim(),
+      lookingFor: String(user?.lookingFor || '').trim(),
+      portfolioHighlights: String(user?.portfolioHighlights || '').trim(),
+      interestTags: Array.isArray(user?.interestTags) ? user.interestTags.slice(0, 8) : [],
+      skills: Array.isArray(user?.skills) ? user.skills.slice(0, 12) : [],
+      profileImage: String(user?.profileImage || '').trim(),
+      instagramUrl: String(user?.instagramUrl || '').trim(),
+      githubUrl: String(user?.githubUrl || '').trim(),
+      linkedinUrl: String(user?.linkedinUrl || '').trim(),
+      portfolioUrl: String(user?.portfolioUrl || '').trim(),
+      profileUpdatedAt: user?.profileUpdatedAt || user?.updatedAt || user?.createdAt || ''
+    };
+  }
+
+  function readNetworkPeopleCache() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(NETWORK_PEOPLE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.map(publicNetworkPerson).filter(Boolean) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function listNetworkPeople(options = {}) {
+    const s = load();
+    const actorId = String(options.actorId || currentActorId() || '').trim();
+    const query = String(options.query || '').trim().toLowerCase();
+    const role = String(options.role || '').trim().toLowerCase();
+    const map = new Map();
+    [...readNetworkPeopleCache(), ...(Array.isArray(s.users) ? s.users : [])].forEach((user) => {
+      const person = publicNetworkPerson(user);
+      if (!person || person.id === actorId) return;
+      map.set(person.id, { ...(map.get(person.id) || {}), ...person });
+    });
+    return Array.from(map.values())
+      .filter((person) => {
+        if (!query) return true;
+        return [person.name, person.nickname, person.headline, person.bio, person.school, person.major, person.lookingFor, ...(person.interestTags || []), ...(person.skills || [])]
+          .join(' ')
+          .toLowerCase()
+          .includes(query);
+      })
+      .filter((person) => !role || [person.headline, person.lookingFor, ...(person.interestTags || []), ...(person.skills || [])].join(' ').toLowerCase().includes(role))
+      .sort((a, b) => new Date(b?.profileUpdatedAt || 0) - new Date(a?.profileUpdatedAt || 0));
+  }
+
+  async function refreshNetworkPeople(options = {}) {
+    if (IS_NETWORK_PREVIEW) return listNetworkPeople(options);
+    const bases = Array.from(new Set(CLOUD_BASE_CANDIDATES));
+    const query = String(options.query || '').trim();
+    for (const base of bases) {
+      try {
+        const url = new URL('/network/people', base);
+        if (query) url.searchParams.set('q', query);
+        const headers = IS_LOCAL_WETHUS && currentActorId() ? { 'x-user-id': currentActorId() } : {};
+        const response = await fetch(url.toString(), { credentials: 'include', headers });
+        if (!response.ok) continue;
+        const payload = await response.json().catch(() => ({}));
+        const people = Array.isArray(payload?.people) ? payload.people.map(publicNetworkPerson).filter(Boolean) : [];
+        localStorage.setItem(NETWORK_PEOPLE_KEY, JSON.stringify(people.slice(0, 200)));
+        return listNetworkPeople(options);
+      } catch (_) {}
+    }
+    return listNetworkPeople(options);
+  }
+
+  function postNetworkAction(pathname, body = {}) {
+    if (IS_NETWORK_PREVIEW) return Promise.resolve({ ok: true, preview: true });
+    const bases = Array.from(new Set(CLOUD_BASE_CANDIDATES));
+    return (async () => {
+      let lastError = null;
+      for (const base of bases) {
+        try {
+          const headers = { 'Content-Type': 'application/json' };
+          if (IS_LOCAL_WETHUS && currentActorId()) headers['x-user-id'] = currentActorId();
+          const response = await fetch(new URL(pathname, base).toString(), {
+            method: 'POST',
+            headers,
+            credentials: 'include',
+            body: JSON.stringify(body)
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload?.ok === false) throw new Error(payload?.error || `network request failed (${response.status})`);
+          return payload;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError || new Error('network request failed');
+    })();
+  }
+
   function toggleConnection(targetUserId) {
     const s = load();
     const actorId = s.currentUserId || (s.devMode ? 'dev-temp' : null);
@@ -823,10 +928,20 @@
     s.connections = Array.isArray(s.connections) ? s.connections : [];
     const index = s.connections.findIndex((item) => String(item?.actorId || '') === String(actorId) && String(item?.targetUserId || '') === targetId);
     let connected = false;
+    let row = null;
     if (index >= 0) {
+      row = s.connections[index];
       s.connections.splice(index, 1);
+      appendSemanticEvent(s, {
+        actorId,
+        action: 'connection_cancelled',
+        targetType: 'person',
+        targetId,
+        visibility: 'private'
+      });
     } else {
-      s.connections.unshift({ id: uid(), actorId, targetUserId: targetId, status: 'requested', createdAt: new Date().toISOString() });
+      row = { id: uid(), actorId, targetUserId: targetId, status: 'requested', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      s.connections.unshift(row);
       connected = true;
       appendSemanticEvent(s, {
         actorId,
@@ -838,13 +953,68 @@
     }
     save(s);
     scheduleCloudSync('connection-toggled');
-    return { connected };
+    postNetworkAction('/network/connections/toggle', {
+      requestId: row?.id || '',
+      targetUserId: targetId,
+      connected
+    }).catch(() => {});
+    return { connected, connection: connected ? row : null };
   }
 
   function listConnections(options = {}) {
     const s = load();
     const actorId = String(options.actorId || s.currentUserId || '').trim();
+    const direction = String(options.direction || 'outgoing').toLowerCase();
+    if (direction === 'incoming') {
+      return (s.incomingConnections || []).filter((item) => !actorId || String(item?.targetUserId || '') === actorId);
+    }
     return (s.connections || []).filter((item) => !actorId || String(item?.actorId || '') === actorId);
+  }
+
+  function respondToConnection(requestId, status) {
+    const normalized = status === 'accepted' ? 'accepted' : 'declined';
+    const s = load();
+    const actorId = currentActorId();
+    const row = (s.incomingConnections || []).find((item) => String(item?.id || '') === String(requestId || ''));
+    if (!row || String(row?.targetUserId || '') !== String(actorId || '')) throw new Error('연결 요청을 찾을 수 없습니다.');
+    row.status = normalized;
+    row.updatedAt = new Date().toISOString();
+    appendSemanticEvent(s, {
+      actorId,
+      action: normalized === 'accepted' ? 'connection_accepted' : 'connection_declined',
+      targetType: 'person',
+      targetId: row.actorId,
+      visibility: 'private'
+    });
+    save(s);
+    scheduleCloudSync('connection-response');
+    postNetworkAction('/network/connections/respond', { requestId: row.id, status: normalized }).catch(() => {});
+    return { ...row };
+  }
+
+  async function refreshNetworkConnections() {
+    if (IS_NETWORK_PREVIEW) return {
+      outgoing: listConnections({ direction: 'outgoing' }),
+      incoming: listConnections({ direction: 'incoming' })
+    };
+    const bases = Array.from(new Set(CLOUD_BASE_CANDIDATES));
+    for (const base of bases) {
+      try {
+        const headers = IS_LOCAL_WETHUS && currentActorId() ? { 'x-user-id': currentActorId() } : {};
+        const response = await fetch(new URL('/network/connections', base).toString(), { credentials: 'include', headers });
+        if (!response.ok) continue;
+        const payload = await response.json().catch(() => ({}));
+        const s = load();
+        if (Array.isArray(payload?.outgoing)) s.connections = payload.outgoing;
+        if (Array.isArray(payload?.incoming)) s.incomingConnections = payload.incoming;
+        save(s);
+        return { outgoing: s.connections || [], incoming: s.incomingConnections || [] };
+      } catch (_) {}
+    }
+    return {
+      outgoing: listConnections({ direction: 'outgoing' }),
+      incoming: listConnections({ direction: 'incoming' })
+    };
   }
 
   function normalizeProfileText(value) {
@@ -1348,6 +1518,7 @@
       asks: mergeRecordsByKey(remote.asks, local.asks, (ask) => String(ask?.id || '')),
       offers: mergeRecordsByKey(remote.offers, local.offers, (offer) => String(offer?.id || '')),
       connections: mergeRecordsByKey(remote.connections, local.connections, (connection) => String(connection?.id || `${connection?.actorId || ''}:${connection?.targetUserId || ''}`)),
+      incomingConnections: mergeRecordsByKey(remote.incomingConnections, local.incomingConnections, (connection) => String(connection?.id || `${connection?.actorId || ''}:${connection?.targetUserId || ''}`)),
       projectViews: mergeRecordsByKey(remote.projectViews, local.projectViews, (view) => String(view?.id || '')),
       currentUserId: local.currentUserId || remote.currentUserId || null
     };
@@ -1478,6 +1649,39 @@
     return s.projectHubs;
   }
 
+  function projectTaskId(title) {
+    const normalized = String(title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    let hash = 2166136261;
+    for (let index = 0; index < normalized.length; index += 1) {
+      hash ^= normalized.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `task-${(hash >>> 0).toString(36)}`;
+  }
+
+  function normalizeProjectTask(value, index, hub = {}) {
+    const source = value && typeof value === 'object' ? value : { title: value };
+    const title = String(source?.title || source?.text || '').trim();
+    if (!title) return null;
+    const id = String(source?.id || projectTaskId(title)).trim();
+    const meta = hub?.taskMeta && typeof hub.taskMeta === 'object' ? (hub.taskMeta[id] || {}) : {};
+    const status = hub?.taskStatus && typeof hub.taskStatus === 'object' ? hub.taskStatus[id] : null;
+    const completed = status && typeof status === 'object' ? !!status.completed : !!status;
+    return {
+      id,
+      title,
+      description: String(source?.description || meta?.description || '').trim(),
+      completed,
+      completedAt: status && typeof status === 'object' ? (status.completedAt || '') : '',
+      dueAt: source?.dueAt || meta?.dueAt || '',
+      time: source?.time || meta?.time || '',
+      location: source?.location || meta?.location || '',
+      assigneeIds: Array.isArray(source?.assigneeIds) ? source.assigneeIds : (Array.isArray(meta?.assigneeIds) ? meta.assigneeIds : []),
+      createdAt: source?.createdAt || meta?.createdAt || '',
+      order: index
+    };
+  }
+
   function getProjectHub(projectId) {
     const s = load();
     const hubs = ensureHubState(s);
@@ -1506,6 +1710,9 @@
       mentorEvidenceGaps: Array.isArray(base.mentorEvidenceGaps) ? base.mentorEvidenceGaps : [],
       mentorGrounding: Array.isArray(base.mentorGrounding) ? base.mentorGrounding : [],
       mentorRuns: Array.isArray(base.mentorRuns) ? base.mentorRuns : [],
+      taskMeta: base.taskMeta && typeof base.taskMeta === 'object' ? base.taskMeta : {},
+      taskStatus: base.taskStatus && typeof base.taskStatus === 'object' ? base.taskStatus : {},
+      schedule: Array.isArray(base.schedule) ? base.schedule : [],
       updatedAt: base.updatedAt || ''
     };
   }
@@ -1520,7 +1727,158 @@
       updatedAt: new Date().toISOString()
     };
     save(s);
+    scheduleCloudSync('project-hub');
     return hubs[projectId];
+  }
+
+  function listProjectTasks(projectId, options = {}) {
+    if (!projectId) return [];
+    const hub = getProjectHub(projectId);
+    const rows = (Array.isArray(hub.weeklyTodos) ? hub.weeklyTodos : [])
+      .map((value, index) => normalizeProjectTask(value, index, hub))
+      .filter(Boolean);
+    return options.includeCompleted === false ? rows.filter((task) => !task.completed) : rows;
+  }
+
+  function addProjectTask(projectId, payload = {}) {
+    const title = String(typeof payload === 'string' ? payload : payload?.title || '').trim();
+    if (!projectId || !title) throw new Error('프로젝트와 작업명을 확인해주세요.');
+    const s = load();
+    const hubs = ensureHubState(s);
+    const previous = hubs[projectId] || {};
+    const existingRows = Array.isArray(previous.weeklyTodos) ? previous.weeklyTodos : [];
+    const existingTitles = existingRows.map((item) => String(typeof item === 'string' ? item : item?.title || item?.text || '').trim());
+    const id = projectTaskId(title);
+    const now = new Date().toISOString();
+    const taskMeta = previous.taskMeta && typeof previous.taskMeta === 'object' ? { ...previous.taskMeta } : {};
+    taskMeta[id] = {
+      ...(taskMeta[id] || {}),
+      id,
+      title,
+      description: String(payload?.description || taskMeta[id]?.description || '').trim(),
+      dueAt: payload?.dueAt || taskMeta[id]?.dueAt || '',
+      time: String(payload?.time || taskMeta[id]?.time || '').trim(),
+      location: String(payload?.location || taskMeta[id]?.location || '').trim(),
+      assigneeIds: Array.isArray(payload?.assigneeIds) ? payload.assigneeIds.slice(0, 12) : (taskMeta[id]?.assigneeIds || []),
+      createdAt: taskMeta[id]?.createdAt || now,
+      createdBy: taskMeta[id]?.createdBy || currentActorId() || ''
+    };
+    hubs[projectId] = {
+      ...previous,
+      weeklyTodos: existingTitles.includes(title) ? existingRows : [title, ...existingRows].slice(0, 30),
+      taskMeta,
+      updatedAt: now
+    };
+    appendSemanticEvent(s, {
+      action: existingTitles.includes(title) ? 'task_updated' : 'task_created',
+      targetType: 'task',
+      targetId: id,
+      projectId,
+      visibility: 'team',
+      metadata: { title, dueAt: taskMeta[id].dueAt, source: payload?.source || 'wethus' }
+    });
+    save(s);
+    scheduleCloudSync('project-task');
+    return normalizeProjectTask(title, 0, hubs[projectId]);
+  }
+
+  function setProjectTaskCompleted(projectId, taskRef, completed) {
+    if (!projectId) throw new Error('프로젝트를 확인해주세요.');
+    const s = load();
+    const hubs = ensureHubState(s);
+    const previous = hubs[projectId] || {};
+    const tasks = (Array.isArray(previous.weeklyTodos) ? previous.weeklyTodos : [])
+      .map((value, index) => normalizeProjectTask(value, index, previous))
+      .filter(Boolean);
+    const task = tasks.find((item) => item.id === String(taskRef || '') || item.title === String(taskRef || ''));
+    if (!task) throw new Error('작업을 찾을 수 없습니다.');
+    const nextCompleted = completed === undefined ? !task.completed : !!completed;
+    const now = new Date().toISOString();
+    const taskStatus = previous.taskStatus && typeof previous.taskStatus === 'object' ? { ...previous.taskStatus } : {};
+    taskStatus[task.id] = {
+      completed: nextCompleted,
+      completedAt: nextCompleted ? now : '',
+      completedBy: nextCompleted ? (currentActorId() || '') : ''
+    };
+    const progress = Array.isArray(previous.progress) ? [...previous.progress] : [];
+    if (nextCompleted) {
+      progress.unshift({ id: uid(), text: `${task.title} 완료`, taskId: task.id, createdAt: now });
+    }
+    hubs[projectId] = { ...previous, taskStatus, progress: progress.slice(0, 80), updatedAt: now };
+    appendSemanticEvent(s, {
+      action: nextCompleted ? 'task_completed' : 'task_reopened',
+      targetType: 'task',
+      targetId: task.id,
+      projectId,
+      visibility: 'team',
+      metadata: { title: task.title, source: 'wethus' }
+    });
+    save(s);
+    scheduleCloudSync('project-task-status');
+    return { ...task, completed: nextCompleted, completedAt: nextCompleted ? now : '' };
+  }
+
+  function listProjectSchedule(projectId, options = {}) {
+    if (!projectId) return [];
+    const hub = getProjectHub(projectId);
+    const rows = (Array.isArray(hub.schedule) ? hub.schedule : []).map((item) => ({ ...item, kind: item?.kind || 'event' }));
+    for (const task of listProjectTasks(projectId)) {
+      if (!task.dueAt) continue;
+      rows.push({
+        id: `schedule-${task.id}`,
+        projectId,
+        taskId: task.id,
+        title: task.title,
+        date: String(task.dueAt).slice(0, 10),
+        time: task.time || '',
+        location: task.location || '프로젝트 작업',
+        completed: task.completed,
+        kind: 'task'
+      });
+    }
+    const from = String(options.from || '').slice(0, 10);
+    const to = String(options.to || '').slice(0, 10);
+    return rows
+      .filter((item) => !from || String(item?.date || '').slice(0, 10) >= from)
+      .filter((item) => !to || String(item?.date || '').slice(0, 10) <= to)
+      .sort((a, b) => `${a?.date || ''}T${a?.time || '23:59'}`.localeCompare(`${b?.date || ''}T${b?.time || '23:59'}`));
+  }
+
+  function addProjectScheduleItem(projectId, payload = {}) {
+    const title = String(payload?.title || '').trim();
+    const date = String(payload?.date || '').slice(0, 10);
+    if (!projectId || !title || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('일정 제목과 날짜를 확인해주세요.');
+    const s = load();
+    const hubs = ensureHubState(s);
+    const previous = hubs[projectId] || {};
+    const now = new Date().toISOString();
+    const item = {
+      id: uid(),
+      projectId,
+      title,
+      date,
+      time: String(payload?.time || '').trim(),
+      location: String(payload?.location || '').trim(),
+      kind: String(payload?.kind || 'event').trim(),
+      createdAt: now,
+      createdBy: currentActorId() || ''
+    };
+    hubs[projectId] = {
+      ...previous,
+      schedule: [item, ...(Array.isArray(previous.schedule) ? previous.schedule : [])].slice(0, 120),
+      updatedAt: now
+    };
+    appendSemanticEvent(s, {
+      action: 'schedule_created',
+      targetType: 'schedule',
+      targetId: item.id,
+      projectId,
+      visibility: 'team',
+      metadata: { title, date, time: item.time, location: item.location }
+    });
+    save(s);
+    scheduleCloudSync('project-schedule');
+    return item;
   }
 
   function addHubActivity(projectId, text) {
@@ -3663,6 +4021,9 @@
         </button>
         <aside class="side-drawer" style="display:none;">
           <div class="side-drawer-group-title">빠른 메뉴</div>
+          <a href="network.html?tab=people" class="side-drawer-item side-drawer-item--row">
+            <span>Network</span>
+          </a>
           <a href="dm.html" class="side-drawer-item side-drawer-item--row">
             <span class="nav-icon-svg" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
             <span>DM</span>
@@ -3775,7 +4136,7 @@
   function initGuestNavGuard() {
     const actor = currentActorId();
     if (actor) return;
-    const protectedHrefs = new Set(['founder.html', 'mentor.html', 'profile.html', 'notifications.html', 'dm.html', 'pricing.html']);
+    const protectedHrefs = new Set(['founder.html', 'mentor.html', 'profile.html', 'notifications.html', 'dm.html', 'network.html', 'pricing.html']);
     const publicHrefs = new Set(['index.html', 'explore.html', 'explore_theme.html', 'explore_v1.html', 'login.html']);
     document.querySelectorAll('a[href]').forEach(a => {
       const href = (a.getAttribute('href') || '').trim();
@@ -3958,6 +4319,11 @@
     getProjectHub,
     upsertProjectHub,
     addHubActivity,
+    listProjectTasks,
+    addProjectTask,
+    setProjectTaskCompleted,
+    listProjectSchedule,
+    addProjectScheduleItem,
     toggleLike,
     isBookmarked,
     toggleBookmark,
@@ -4023,8 +4389,12 @@
     updateAskStatus,
     createOffer,
     listOffers,
+    listNetworkPeople,
+    refreshNetworkPeople,
     toggleConnection,
     listConnections,
+    respondToConnection,
+    refreshNetworkConnections,
     currentActorId,
     uiConfirm,
     uiAlert,

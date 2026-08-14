@@ -126,6 +126,29 @@
     .hub-progress-summary{display:none}
     .meta-bullet{margin:0;padding-left:17px;color:#d6d6d6}
     .meta-bullet li{margin:5px 0;line-height:1.52}
+    .hub-task-list{display:grid;gap:7px;padding:0;list-style:none}
+    .hub-task-row{margin:0!important;border:1px solid #2c2c2c;border-radius:11px;background:#151515;transition:border-color .18s ease,background .18s ease,box-shadow .18s ease}
+    .hub-task-row:hover{border-color:#444;background:#181818}
+    .hub-task-label{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center;padding:9px 10px;cursor:pointer}
+    .hub-task-label input{width:17px;height:17px;margin:0;accent-color:#ff8a00}
+    .hub-task-copy{display:grid;gap:2px;min-width:0}
+    .hub-task-title{color:#f2f2f2;font-size:.86rem;font-weight:750;line-height:1.4;overflow-wrap:anywhere}
+    .hub-task-meta{color:#969696;font-size:.73rem;white-space:nowrap}
+    .hub-task-row.is-complete .hub-task-title{text-decoration:line-through;color:#858585}
+    .hub-task-row.is-complete{background:#111;border-color:#242424}
+    .hub-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+    .hub-card-head h3{margin:0}
+    .hub-schedule-list{display:grid;gap:7px;padding:0;list-style:none}
+    .hub-schedule-row{margin:0!important}
+    .hub-schedule-link{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 11px;border:1px solid #2c2c2c;border-radius:11px;background:#151515;color:#f3f3f3;text-decoration:none;transition:border-color .18s ease,background .18s ease}
+    .hub-schedule-link:hover{border-color:#474747;background:#191919}
+    .hub-schedule-date{display:grid;place-items:center;min-width:44px;padding:6px 7px;border-radius:9px;background:#21170e;color:#ffb36d;font-size:.76rem;font-weight:800}
+    .hub-schedule-copy{display:grid;gap:2px;min-width:0}
+    .hub-schedule-copy strong{font-size:.86rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .hub-schedule-copy span,.hub-schedule-time{color:#929292;font-size:.74rem}
+    .hub-schedule-empty{margin:0!important;padding:10px 0;color:#9a9a9a;font-size:.83rem}
+    .hub-focus-highlight{border-color:#ff8a00!important;box-shadow:0 0 0 3px rgba(255,138,0,.15);animation:hubFocusPulse 1.4s ease both}
+    @keyframes hubFocusPulse{0%,100%{box-shadow:0 0 0 3px rgba(255,138,0,.1)}45%{box-shadow:0 0 0 7px rgba(255,138,0,.18)}}
     .hidden{display:none !important}
     .chat-row{display:grid;gap:4px;max-width:82%;}
     .chat-row.mine{justify-self:end;}
@@ -313,6 +336,7 @@
 
             <article class="hub-card"><h3>현재 목표</h3><p id="ovGoal" style="margin:0;line-height:1.55;"></p></article>
             <article class="hub-card"><h3>이번 주 할 일</h3><ul id="ovTodos" class="meta-bullet"></ul></article>
+            <article class="hub-card" id="ovScheduleCard"><div class="hub-card-head"><h3>다가오는 일정</h3><a id="ovScheduleManage" class="btn btn--secondary" href="network.html?tab=schedule">일정 관리</a></div><ul id="ovSchedule" class="hub-schedule-list"></ul></article>
             <article class="hub-card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><h3 style="margin:0;">최근 활동</h3><button id="ovRecentMoreBtn" class="btn btn--secondary" type="button" style="display:none;padding:5px 9px;">전체보기</button></div><ul id="ovRecent" class="meta-bullet" style="margin-top:7px;"></ul></article>
             <details id="hubOverviewMore" class="hub-more-details">
               <summary id="hubOverviewMoreSummary" class="hub-more-summary">운영 정보</summary>
@@ -429,7 +453,7 @@
 
   <footer class="footer"><div class="container"><div class="footer-inner"><span class="wordmark">WETHUS</span><p class="footer-copy">학생 창업 실행 플랫폼 WETHUS<br/><a href="mailto:wethus.biz@gmail.com">wethus.biz@gmail.com</a></p></div></div></footer>
 
-  <script src="app.js?v=20260624-integrations-2"></script>
+  <script src="app.js?v=20260814-service-integration-5"></script>
   <script>
     const authLink = document.querySelector('.js-auth-link');
     function currentHubActorId() {
@@ -493,6 +517,10 @@
     const hubProjectList = document.getElementById('hubProjectList');
     let currentProject = null;
     let activeTab='overview';
+    const hubTabs = ['overview','progress','materials','integrations','team'];
+    const requestedHubTab = hubTabs.includes(hubQuery.get('tab')) ? hubQuery.get('tab') : 'overview';
+    let pendingHubFocus = String(hubQuery.get('focus') || '').trim();
+    let pendingHubTaskId = String(hubQuery.get('taskId') || '').trim();
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
       '&': '&amp;',
       '<': '&lt;',
@@ -516,6 +544,69 @@
     }
     function getPersistedProject() {
       try { return localStorage.getItem(hubPersistKey()) || ''; } catch { return ''; }
+    }
+
+    function availableHubProjects() {
+      const rows = [...(WETHUS.myProjects?.() || []), ...(WETHUS.myParticipatingProjects?.() || [])];
+      const map = new Map();
+      rows.forEach((project) => {
+        if (project?.id) map.set(String(project.id), project);
+      });
+      return Array.from(map.values());
+    }
+
+    function currentHubTasks() {
+      if (!currentProject?.id || !WETHUS.listProjectTasks) return [];
+      return WETHUS.listProjectTasks(currentProject.id);
+    }
+
+    function formatHubTaskDue(value) {
+      const raw = String(value || '').slice(0, 10);
+      if (!raw) return '';
+      const date = new Date(`${raw}T12:00:00`);
+      if (Number.isNaN(date.getTime())) return '';
+      return `${date.getMonth() + 1}.${date.getDate()}`;
+    }
+
+    function renderHubTasks(tasks = currentHubTasks()) {
+      const root = document.getElementById('ovTodos');
+      if (!root) return;
+      root.classList.add('hub-task-list');
+      root.innerHTML = tasks.length ? tasks.map((task) => {
+        const due = formatHubTaskDue(task.dueAt || task.date);
+        return `<li class="hub-task-row ${task.completed ? 'is-complete' : ''}" data-hub-task-id="${esc(task.id)}">
+          <label class="hub-task-label">
+            <input type="checkbox" data-hub-task-toggle="${esc(task.id)}" ${task.completed ? 'checked' : ''} />
+            <span class="hub-task-copy"><span class="hub-task-title">${esc(task.title)}</span>${task.location ? `<span class="hub-task-meta">${esc(task.location)}</span>` : ''}</span>
+            ${due ? `<span class="hub-task-meta">${esc(due)}</span>` : ''}
+          </label>
+        </li>`;
+      }).join('') : '<li class="hub-task-row"><span class="hub-task-label"><span aria-hidden="true">+</span><span class="hub-task-copy"><span class="hub-task-title">홈이나 진행 탭에서 첫 할 일을 추가하세요.</span></span></span></li>';
+    }
+
+    function networkScheduleUrl(date = '') {
+      const params = new URLSearchParams({ tab: 'schedule' });
+      if (currentProject?.id) params.set('projectId', String(currentProject.id));
+      if (date) params.set('date', String(date).slice(0, 10));
+      if (isNetworkPreview) params.set('preview', '1');
+      return `network.html?${params.toString()}`;
+    }
+
+    function renderHubSchedule() {
+      const root = document.getElementById('ovSchedule');
+      const manage = document.getElementById('ovScheduleManage');
+      if (!root || !currentProject?.id) return;
+      const today = new Date();
+      const from = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const rows = (WETHUS.listProjectSchedule?.(currentProject.id, { from }) || []).slice(0, 4);
+      if (manage) manage.href = networkScheduleUrl(rows[0]?.date || from);
+      root.innerHTML = rows.length ? rows.map((item) => {
+        const date = String(item.date || '').slice(0, 10);
+        const parsed = new Date(`${date}T12:00:00`);
+        const dateLabel = Number.isNaN(parsed.getTime()) ? '일정' : `${parsed.getMonth() + 1}.${parsed.getDate()}`;
+        const detail = [item.location || (item.kind === 'task' ? '프로젝트 작업' : ''), item.completed ? '완료' : ''].filter(Boolean).join(' · ');
+        return `<li class="hub-schedule-row" data-hub-schedule-id="${esc(item.id || '')}"><a class="hub-schedule-link" href="${esc(networkScheduleUrl(date))}"><span class="hub-schedule-date">${esc(dateLabel)}</span><span class="hub-schedule-copy"><strong>${esc(item.title || '일정')}</strong><span>${esc(detail || '세부 정보 없음')}</span></span><span class="hub-schedule-time">${esc(item.time || '종일')}</span></a></li>`;
+      }).join('') : `<li class="hub-schedule-empty">예정된 일정이 없습니다. <a href="${esc(networkScheduleUrl(from))}">첫 일정 추가</a></li>`;
     }
 
     function googleOauthRedirectUri() {
@@ -690,7 +781,7 @@
     function closeModal(id){ const el=document.getElementById(id); el.classList.remove('open'); el.setAttribute('aria-hidden','true'); document.body.style.overflow=''; }
 
     function renderProjectList(){
-      const list = WETHUS.myProjects();
+      const list = availableHubProjects();
       if(!list.length){ hubProjectList.innerHTML='<article class="hub-item"><h3 style="margin:0 0 6px;">프로젝트가 없습니다.</h3><p class="meta" style="margin:0;">먼저 프로젝트를 시작하면 허브를 사용할 수 있어요.</p><div style="margin-top:10px;"><a href="founder.html" class="btn btn--primary">프로젝트 시작하기</a></div></article>'; return; }
       hubProjectList.innerHTML = list.map(p=>`<article class="hub-item hub-item--project" data-id="${esc(p.id)}">${p.image ? `<img src="${esc(safeUrl(p.image))}" alt="project" class="hub-thumb" style="width:44px;height:44px;border-radius:10px;flex:0 0 auto;"/>` : '<span class="hub-thumb hub-thumb--fallback" aria-hidden="true"></span>'}<div class="hub-item-copy"><h3 style="margin:0 0 6px;">${esc(p.title)}</h3><p class="meta" style="margin:0 0 4px;">${esc(p.category||'')} · ${esc(p.status||'')}</p><p class="hub-item-summary">${esc(compactProjectSummary(p.summary, 48) || '요약 준비 중')}</p></div></article>`).join('');
       hubProjectList.querySelectorAll('[data-id]').forEach(el=>el.addEventListener('click',()=>openProject(el.getAttribute('data-id'))));
@@ -768,7 +859,7 @@
         });
       });
       document.getElementById('ovGoal').textContent=hub.goal;
-      document.getElementById('ovTodos').innerHTML=(hub.weeklyTodos||[]).map(t=>`<li>${esc(t)}</li>`).join('')||'<li>이번 주 할 일을 등록하세요.</li>';
+      renderHubTasks();
       const recentAll = (hub.recentActivities || []);
       const recentTop = recentAll.slice(0, 5);
       document.getElementById('ovRecent').innerHTML=recentTop.map(a=>`<li>${esc(a.text)} · ${esc(new Date(a.createdAt).toLocaleString('ko-KR'))}</li>`).join('')||'<li>최근 활동이 없습니다.</li>';
@@ -814,7 +905,7 @@
       statusRows.push(snapshot?.suggested_next_action ? `다음 액션: ${snapshot.suggested_next_action}` : `팀원 수: ${(p.teamMembers||[]).length}명`);
       if (snapshotUpdatedAt) statusRows.push(`상태 갱신: ${snapshotUpdatedAt}`);
       document.getElementById('sdStatus').innerHTML = statusRows.map((row) => `<li>${esc(row)}</li>`).join('');
-      renderTab(activeTab);
+      renderTab(activeTab, { keepFocus: true });
     }
 
     let insightTimer = null;
@@ -1236,21 +1327,69 @@
       }, 350);
     }
 
-    function renderTab(tab){
-      activeTab=tab;
-      document.querySelectorAll('.hub-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('data-tab')===tab));
-      ['overview','progress','materials','integrations','team'].forEach(k=>document.getElementById(`tab-${k}`).classList.toggle('hidden',k!==tab));
+    function renderTab(tab, options = {}){
+      const nextTab = hubTabs.includes(tab) ? tab : 'overview';
+      activeTab=nextTab;
+      document.querySelectorAll('.hub-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('data-tab')===nextTab));
+      hubTabs.forEach(k=>document.getElementById(`tab-${k}`).classList.toggle('hidden',k!==nextTab));
+      if (currentProject && options.syncUrl !== false) {
+        const nextParams = new URLSearchParams(location.search);
+        nextParams.set('projectId', String(currentProject.id));
+        nextParams.set('tab', nextTab);
+        if (options.keepFocus !== true) {
+          nextParams.delete('focus');
+          nextParams.delete('taskId');
+        }
+        if (isNetworkPreview) nextParams.set('preview', '1');
+        history.replaceState({},'',`project-hub.html?${nextParams.toString()}`);
+      }
+    }
+
+    function focusHubDeepLink() {
+      let target = null;
+      let targetTab = requestedHubTab;
+      if (pendingHubTaskId || pendingHubFocus === 'tasks') {
+        targetTab = 'overview';
+        target = pendingHubTaskId
+          ? document.querySelector(`[data-hub-task-id="${CSS.escape(pendingHubTaskId)}"]`)
+          : document.getElementById('ovTodos')?.closest('.hub-card');
+      } else if (pendingHubFocus === 'ai') {
+        targetTab = 'progress';
+        target = document.getElementById('pgAiSummary')?.closest('.hub-card') || document.getElementById('tab-progress');
+      } else if (pendingHubFocus === 'schedule') {
+        targetTab = 'overview';
+        target = document.getElementById('ovScheduleCard');
+      } else if (pendingHubFocus === 'materials') {
+        targetTab = 'materials';
+        target = document.getElementById('tab-materials');
+      } else if (pendingHubFocus === 'integrations') {
+        targetTab = 'integrations';
+        target = document.getElementById('tab-integrations');
+      }
+      renderTab(targetTab, { keepFocus: true });
+      if (target) {
+        target.classList.add('hub-focus-highlight');
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        window.setTimeout(() => target.classList.remove('hub-focus-highlight'), 2200);
+      }
+      pendingHubFocus = '';
+      pendingHubTaskId = '';
     }
 
     async function openProject(id){
-      const p=WETHUS.myProjects().find(x=>x.id===id); if(!p) return;
+      const p=availableHubProjects().find(x=>String(x.id)===String(id)); if(!p) return;
       currentProject=p;
       hubListView.classList.add('hidden');
       hubDetailView.classList.remove('hidden');
-      history.replaceState({},'',`project-hub.html?projectId=${encodeURIComponent(id)}${isNetworkPreview ? '&preview=1' : ''}`);
+      const nextParams = new URLSearchParams(location.search);
+      nextParams.set('projectId', String(id));
+      nextParams.set('tab', requestedHubTab);
+      if (isNetworkPreview) nextParams.set('preview', '1');
+      history.replaceState({},'',`project-hub.html?${nextParams.toString()}`);
       setPersistedProject(id);
       maybeOpenAiAddModal();
-      renderHub().catch(() => {});
+      await renderHub().catch(() => {});
+      focusHubDeepLink();
       if (!isNetworkPreview) {
         refreshHubInsights('project-open');
         startInsightAutoRefresh();
@@ -1299,6 +1438,20 @@
     document.getElementById('sdHumanBtn').addEventListener('click',()=>location.href=mentorHref('human'));
 
     document.getElementById('hubTabs').addEventListener('click',(e)=>{const b=e.target.closest('[data-tab]'); if(!b) return; renderTab(b.getAttribute('data-tab'));});
+    document.getElementById('ovTodos')?.addEventListener('change', async (event) => {
+      const input = event.target.closest('[data-hub-task-toggle]');
+      if (!input || !currentProject?.id || !WETHUS.setProjectTaskCompleted) return;
+      input.disabled = true;
+      try {
+        WETHUS.setProjectTaskCompleted(currentProject.id, input.getAttribute('data-hub-task-toggle'), input.checked);
+        await renderHub();
+      } catch (error) {
+        input.checked = !input.checked;
+        alert(error?.message || '할 일 상태를 저장하지 못했습니다.');
+      } finally {
+        input.disabled = false;
+      }
+    });
     document.getElementById('hubPrimaryActionBtn')?.addEventListener('click', (event) => {
       const tab = event.currentTarget?.dataset?.targetTab || 'progress';
       renderTab(tab);
@@ -1650,6 +1803,8 @@
       if (!p) return;
 
       const hub = Object.assign(fallbackHub(p), WETHUS.getProjectHub(p.id));
+      const tasks = currentHubTasks();
+      const openTasks = tasks.filter((task) => !task.completed);
       document.getElementById('hubThumb').src = safeUrl(p.image || 'https://picsum.photos/seed/hub-main/240/240');
       document.getElementById('hubTitle').textContent = p.title || '';
       document.getElementById('hubCategory').textContent = p.category || 'Uncategorized';
@@ -1658,7 +1813,7 @@
       document.getElementById('hubSummary').textContent = compactProjectSummary(p.summary, 56) || '';
       const summaryStrip = document.getElementById('hubSummaryStrip');
       const materialsCount = Array.isArray(hub.materials) ? hub.materials.length : 0;
-      const todoCount = Array.isArray(hub.weeklyTodos) ? hub.weeklyTodos.filter(Boolean).length : 0;
+      const todoCount = openTasks.length;
       const teamCount = Array.isArray(p.teamMembers) ? p.teamMembers.length : 0;
       const summaryChips = [
         { label: '팀', value: `${teamCount}명` },
@@ -1685,7 +1840,8 @@
       });
 
       document.getElementById('ovGoal').textContent = hub.goal || '';
-      document.getElementById('ovTodos').innerHTML = (hub.weeklyTodos || []).map((todo) => `<li>${esc(todo)}</li>`).join('') || '<li>이번 주 할일을 등록하세요.</li>';
+      renderHubTasks(tasks);
+      renderHubSchedule();
       document.getElementById('ovBlocker').textContent = hub.blocker || '';
       document.getElementById('ovTools').innerHTML = (hub.tools || []).map((tool) => `<article class="tool-card"><strong>${esc(tool.name)}</strong><p class="meta" style="margin:4px 0 0;">${esc(tool.desc || '')}</p></article>`).join('');
 
@@ -1729,7 +1885,7 @@
         if (node) node.textContent = value || fallback;
       };
       setBoardText('hubCommandFocusTitle', hub.goal || '이번 주 핵심 목표를 먼저 정리하세요.');
-      setBoardText('hubCommandFocusBody', hub.weeklyTodos?.[0] || hub.blocker || '할 일, 막힌 점, 필요한 도움을 한 줄로 적어두면 팀 속도가 올라갑니다.');
+      setBoardText('hubCommandFocusBody', openTasks[0]?.title || hub.blocker || '할 일, 막힌 점, 필요한 도움을 한 줄로 적어두면 팀 속도가 올라갑니다.');
       setBoardText('hubCommandSignalTitle', snapshot?.suggested_next_action || '지금 보이는 실행 신호를 먼저 붙잡으세요.');
       setBoardText('hubCommandSignalBody', snapshot?.recent_activity_summary || recentActivityLabelFromHub(hub) || '최근 로그와 AI 요약이 모이면 다음 행동이 더 또렷해집니다.');
       setBoardText('hubCommandOpsTitle', connectedIntegrations.length ? `연결된 외부 도구 ${connectedIntegrations.length}개` : '외부 도구 연결을 시작해보세요.');
@@ -1793,7 +1949,7 @@
         statusRows,
         adviceRows: ['목표를 이번 주 단위로 쪼개세요.', '막힘 요소를 카드에 적어두세요.', '멘토 요청을 구체적으로 쓰세요.']
       });
-      renderTab(activeTab);
+      renderTab(activeTab, { keepFocus: true });
       refreshHubDensityUi(WETHUS.getProjectHub(p.id));
     };
 
