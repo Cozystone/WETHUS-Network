@@ -6,12 +6,14 @@
   const DEFAULT_OPENAI_KEY = '';
   const ADMIN_MODE_USER_ID = 'admin-mode';
   const IS_LOCAL_WETHUS = typeof location !== 'undefined' && ['localhost', '127.0.0.1'].includes(location.hostname);
-  const CLOUD_BASE_CANDIDATES = [
+  const IS_NETWORK_PREVIEW = typeof location !== 'undefined'
+    && /^wethus-network-integrated-preview(?:-[a-z0-9]+)?\.vercel\.app$/i.test(location.hostname);
+  const CLOUD_BASE_CANDIDATES = (IS_NETWORK_PREVIEW ? [] : [
     IS_LOCAL_WETHUS ? `${location.protocol}//${location.hostname}:8787` : '',
     (typeof window !== 'undefined' && window.WETHUS_API_BASE) ? window.WETHUS_API_BASE : '',
     'https://wethus-api.onrender.com/api',
     'https://wethus-api.onrender.com'
-  ].filter(Boolean).map(x => String(x).replace(/\/$/, '').replace(/\/api$/, ''));
+  ]).filter(Boolean).map(x => String(x).replace(/\/$/, '').replace(/\/api$/, ''));
   let cloudSyncTimer = null;
   let cloudAutoPullTimer = null;
   let restoredServerSessionActorId = '';
@@ -2516,6 +2518,7 @@
   }
 
   async function syncCloudState(emailInput) {
+    if (IS_NETWORK_PREVIEW) return { ok: true, preview: true, skipped: true };
     const email = String(emailInput || currentUser()?.email || '').trim().toLowerCase();
     if (!email) return { ok: false, reason: 'email-missing' };
 
@@ -2575,6 +2578,7 @@
   }
 
   function scheduleCloudSync(reason = 'auto') {
+    if (IS_NETWORK_PREVIEW) return;
     const me = currentUser();
     if (!me?.email) return;
     if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
@@ -2584,6 +2588,7 @@
   }
 
   function startAutoCloudSync() {
+    if (IS_NETWORK_PREVIEW) return;
     if (cloudAutoPullTimer) return;
     const meNow = currentUser();
     if (meNow?.email) syncCloudState(meNow.email).catch(() => {});
