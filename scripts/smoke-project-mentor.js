@@ -2,10 +2,12 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
 
 const repoRoot = path.resolve(__dirname, '..');
 const backendRoot = path.join(repoRoot, 'WETHUS2', 'backend');
 const port = Number(process.env.WETHUS_PROJECT_MENTOR_SMOKE_PORT || 8897);
+const mockOllamaPort = Number(process.env.WETHUS_PROJECT_MENTOR_MOCK_PORT || (port + 1));
 const baseUrl = `http://127.0.0.1:${port}`;
 const errors = [];
 
@@ -15,6 +17,78 @@ function fail(message) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function startMockOllama(capturedPrompts) {
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      let request = {};
+      try { request = JSON.parse(raw || '{}'); } catch (_) {}
+      const prompt = String(request?.messages?.find((message) => message?.role === 'user')?.content || '');
+      capturedPrompts.push(prompt);
+      const plannerRequest = prompt.includes('CONTEXT_SCOPE_PLANNER');
+      const conversationSelectorRequest = prompt.includes('CONVERSATION_SELECTOR');
+      const selectorRequest = prompt.includes('REFERENCE_SELECTOR');
+      const metadataRequest = prompt.includes('TURN_METADATA_EXTRACTOR');
+      const currentMessage = metadataRequest
+        ? String(prompt.match(/User message:\s*([\s\S]*?)\n\nAssistant reply:/)?.[1] || '').trim()
+        : String(prompt.match(/Current user message:\s*([\s\S]*?)\n\n(?:Recent conversation|Selected conversation context|Selected project context|Current execution|Project snapshot):/)?.[1] || '').trim();
+      let preparedRecords = [];
+      if (selectorRequest) {
+        try { preparedRecords = JSON.parse(String(prompt.split('Reference index:\n')[1] || '[]')); } catch (_) {}
+      } else if (metadataRequest) {
+        try { preparedRecords = JSON.parse(String(prompt.split('Prepared references:\n')[1] || '[]')); } catch (_) {}
+      }
+      const referenceIds = (Array.isArray(preparedRecords) ? preparedRecords : [])
+        .filter((record) => record?.evidenceClass !== 'conversation_memory')
+        .map((record) => String(record?.id || ''))
+        .filter(Boolean)
+        .slice(0, 2);
+      const conversational = currentMessage === '안녕' || currentMessage === '?';
+      const content = plannerRequest
+        ? JSON.stringify({
+            projectContextual: !conversational,
+            responseMode: conversational ? (currentMessage === '안녕' ? 'conversation' : 'clarification') : 'project',
+            needsConversationContext: false
+          })
+        : (conversationSelectorRequest
+          ? JSON.stringify({ selectedConversationIds: [] })
+          : (selectorRequest
+          ? JSON.stringify({
+              selectedReferenceIds: conversational ? [] : referenceIds
+            })
+          : (metadataRequest
+          ? JSON.stringify({
+                projectContextual: true,
+                priority: '핵심 상호작용 회귀 검증',
+                executionBlocker: '배포 전 실제 계정 기준의 검증 결과가 아직 없습니다.',
+                nextActions: ['Leader와 Tester 계정으로 좋아요와 댓글을 한 번씩 왕복 검증합니다.'],
+                questions: [],
+                toolActions: [],
+                evidenceGaps: ['배포 환경에서의 실제 반영 결과'],
+                usedReferenceIds: referenceIds
+              })
+          : (conversational
+            ? (currentMessage === '안녕'
+                ? '반가워요. 오늘은 어떤 이야기를 나눠볼까요?'
+                : '어느 부분이 걸렸는지 조금만 더 알려주실래요?')
+            : '최근 실행 기록을 함께 보면, 먼저 좋아요와 댓글 흐름을 실제 계정으로 다시 확인하는 편이 좋습니다.'))));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ message: { content } }));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(mockOllamaPort, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function closeServer(server) {
+  if (!server?.listening) return Promise.resolve();
+  return new Promise((resolve) => server.close(resolve));
 }
 
 function stopChild(child) {
@@ -57,9 +131,12 @@ function expectList(name, value, maxLength) {
 (async () => {
   const logs = { text: '' };
   const smokeDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wethus-project-mentor-smoke-'));
+  const capturedPrompts = [];
   let child;
+  let mockOllama;
 
   try {
+    mockOllama = await startMockOllama(capturedPrompts);
     child = spawn(process.execPath, ['server.js'], {
       cwd: backendRoot,
       env: {
@@ -68,8 +145,8 @@ function expectList(name, value, maxLength) {
         WETHUS_DATA_DIR: smokeDataDir,
         RATE_LIMIT_DISABLED: 'true',
         AI_PROVIDER: 'local',
-        OLLAMA_BASE_URL: 'http://127.0.0.1:9',
-        OLLAMA_MODEL: 'missing-model'
+        OLLAMA_BASE_URL: `http://127.0.0.1:${mockOllamaPort}`,
+        OLLAMA_MODEL: 'wethus-smoke-model'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -149,23 +226,23 @@ function expectList(name, value, maxLength) {
     if (Number(payload?.memory?.stats?.nodes || 0) < 3) {
       fail('project mentor response should persist graph nodes');
     }
-    if (!String(payload?.understanding?.situation || '').trim()) {
-      fail('project mentor response should include a synthesized situation model');
-    }
-    if (!String(payload?.understanding?.decisionNeeded || '').trim()) {
-      fail('project mentor understanding should identify the decision or execution target');
-    }
-    if (!String(payload?.understanding?.whyNow || '').trim()) {
-      fail('project mentor understanding should explain why the target matters now');
+    if (payload?.projectContextual !== true || payload?.responseMode !== 'project') {
+      fail('project mentor should preserve the model decision that this turn uses project context');
     }
     if (!Array.isArray(payload?.understanding?.selectedNodeIds)) {
       fail('project mentor understanding should expose selected graph records');
     }
-    if (payload?.understanding?.method !== 'structured-fallback-v1') {
-      fail('unavailable model should use the structured understanding fallback');
+    if (payload?.understanding?.method !== 'model-native-reference-reasoning-v1') {
+      fail('project mentor should report model-native reference reasoning');
     }
     if (Number(payload?.understanding?.evidenceCount || 0) < 1) {
-      fail('situation model should select factual project records');
+      fail('model-native response should identify factual records it used');
+    }
+    if (Number(payload?.references?.availableReferenceCount || 0) < 3) {
+      fail('project mentor should prepare a project reference packet before asking the model');
+    }
+    if (Number(payload?.references?.usedReferenceCount || 0) < 1) {
+      fail('project mentor should expose which prepared records the model actually used');
     }
     if (payload?.memory?.retrieval?.mode !== 'hybrid-context-candidates') {
       fail('project mentor should report hybrid context retrieval');
@@ -178,11 +255,16 @@ function expectList(name, value, maxLength) {
     expectList('toolActions', payload?.toolActions, 2);
     expectList('evidenceGaps', payload?.evidenceGaps, 3);
     expectList('grounding', payload?.grounding, 4);
-    if (Array.isArray(payload?.questions) && payload.questions.some((item) => String(item || '').includes('문서 0건과 최근 활동을 반영해'))) {
-      fail('project mentor fallback should not leak internal auto-refresh prompts into user-facing questions');
+    const selectorPrompt = capturedPrompts.find((item) => item.includes('REFERENCE_SELECTOR')) || '';
+    const answerPrompt = capturedPrompts.find((item) => item.includes('Selected project context:')) || '';
+    if (!selectorPrompt.includes('Reference index:') || !selectorPrompt.includes('좋아요와 댓글')) {
+      fail('reference selector should receive the prepared project reference index');
+    }
+    if (!answerPrompt.includes('Selected project context:')) {
+      fail('answer model should receive only the selected project context');
     }
 
-    for (const [prompt, expectedMode] of [['안녕', 'greeting'], ['?', 'clarification']]) {
+    for (const [prompt, expectedMode] of [['안녕', 'conversation'], ['?', 'clarification']]) {
       const conversationResponse = await fetch(`${baseUrl}/ai/project-mentor`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-user-id': 'mentor-smoke-user' },
@@ -208,6 +290,17 @@ function expectList(name, value, maxLength) {
       if (!String(conversationPayload?.summary || '').trim()) fail(`${expectedMode} conversation should include a natural reply`);
       if (conversationPayload?.nextActions?.length) fail(`${expectedMode} conversation should not manufacture project actions`);
       if (conversationPayload?.grounding?.length) fail(`${expectedMode} conversation should not manufacture project evidence`);
+      if (Number(conversationPayload?.references?.availableReferenceCount || 0) < 1) {
+        fail(`${expectedMode} conversation should still receive prepared reference material`);
+      }
+      if (Number(conversationPayload?.references?.usedReferenceCount || 0) !== 0) {
+        fail(`${expectedMode} conversation should not pretend it used project records`);
+      }
+      const capturedPrompt = [...capturedPrompts].reverse()
+        .find((item) => item.includes(`Current user message:\n${prompt}`) && item.includes('Selected conversation context:')) || '';
+      if (!capturedPrompt.includes('Selected conversation context:') || !capturedPrompt.includes(`Current user message:\n${prompt}`)) {
+        fail(`${expectedMode} request should be answered naturally without injecting the full project index`);
+      }
     }
 
     const memoryResponse = await fetch(`${baseUrl}/ai/memory/graph?limit=100`, {
@@ -253,6 +346,7 @@ function expectList(name, value, maxLength) {
     fail(error.message || String(error));
   } finally {
     await stopChild(child);
+    await closeServer(mockOllama);
     fs.rmSync(smokeDataDir, { recursive: true, force: true });
   }
 

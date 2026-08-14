@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 const { spawn } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -8,11 +9,72 @@ const appRoot = path.join(repoRoot, 'WETHUS2');
 const backendRoot = path.join(appRoot, 'backend');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wethus-network-smoke-'));
 const port = 18987;
+const mockOllamaPort = 18988;
 const base = `http://127.0.0.1:${port}`;
 const errors = [];
 
 function fail(message) {
   errors.push(message);
+}
+
+function startMockOllama() {
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      let request = {};
+      try { request = JSON.parse(raw || '{}'); } catch (_) {}
+      const prompt = String(request?.messages?.find((message) => message?.role === 'user')?.content || '');
+      const plannerRequest = prompt.includes('CONTEXT_SCOPE_PLANNER');
+      const conversationSelectorRequest = prompt.includes('CONVERSATION_SELECTOR');
+      const selectorRequest = prompt.includes('REFERENCE_SELECTOR');
+      const metadataRequest = prompt.includes('TURN_METADATA_EXTRACTOR');
+      let records = [];
+      if (selectorRequest) {
+        try { records = JSON.parse(String(prompt.split('Reference index:\n')[1] || '[]')); } catch (_) {}
+      } else if (metadataRequest) {
+        try { records = JSON.parse(String(prompt.split('Prepared references:\n')[1] || '[]')); } catch (_) {}
+      }
+      const resourceId = (Array.isArray(records) ? records : []).find((record) => record?.type === 'Resource')?.id;
+      const content = plannerRequest
+        ? JSON.stringify({
+            projectContextual: true,
+            responseMode: 'project',
+            needsConversationContext: false
+          })
+        : (conversationSelectorRequest
+          ? JSON.stringify({ selectedConversationIds: [] })
+          : (selectorRequest
+          ? JSON.stringify({
+              selectedReferenceIds: resourceId ? [resourceId] : []
+            })
+          : (metadataRequest
+          ? JSON.stringify({
+            projectContextual: true,
+            responseMode: 'project',
+            priority: '실제 결제 전환 확인',
+            executionBlocker: '표현된 의향과 실제 결제 행동의 차이가 아직 측정되지 않았습니다.',
+            nextActions: ['인터뷰 참여자에게 같은 조건의 결제 링크를 보내 실제 전환을 기록합니다.'],
+            questions: [],
+            toolActions: [],
+            evidenceGaps: ['실제 결제 전환율'],
+            usedReferenceIds: resourceId ? [resourceId] : []
+          })
+          : '인터뷰에서 나온 결제 의향은 아직 실제 구매가 아니므로, 같은 가격으로 작은 결제 링크 실험을 이어가는 편이 좋습니다.')));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ message: { content } }));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(mockOllamaPort, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function closeServer(server) {
+  if (!server?.listening) return Promise.resolve();
+  return new Promise((resolve) => server.close(resolve));
 }
 
 function actorState(id, name, email) {
@@ -59,6 +121,7 @@ function validateFrontendContracts() {
   const directory = fs.readFileSync(path.join(appRoot, 'network-directory.js'), 'utf8');
   const hub = fs.readFileSync(path.join(appRoot, 'project-hub.html'), 'utf8');
   const member = fs.readFileSync(path.join(appRoot, 'member.html'), 'utf8');
+  const backend = fs.readFileSync(path.join(appRoot, 'backend', 'server.js'), 'utf8');
   const checks = [
     [app.includes('function refreshNetworkPeople('), 'public people refresh contract missing'],
     [app.includes('function mergeConnectionRecords(') && app.includes("status: 'cancelled'"), 'connection tombstone merge contract missing'],
@@ -67,7 +130,19 @@ function validateFrontendContracts() {
     [home.includes("projectHubHref({ tab: 'overview', focus: 'tasks'"), 'home-to-hub task deep link missing'],
     [home.includes('function buildProjectFlow(') && home.includes('data-home-schedule-id'), 'home project-flow schedule integration missing'],
     [home.includes('data-flow-request-form="ask"') && home.includes('data-flow-request-form="offer"'), 'home ASK/OFFER integration missing'],
-    [home.includes('function lightweightChatReply(') && home.includes("projectContextual: false"), 'natural lightweight chat contract missing'],
+    [
+      !home.includes('lightweightChatReply') &&
+      !home.includes('fallbackAiReply') &&
+      !backend.includes('classifyProjectMentorConversationTurn') &&
+      !backend.includes('buildProjectMentorFallback(') &&
+      !backend.includes('detectProjectMentorMode(') &&
+      backend.includes('CONTEXT_SCOPE_PLANNER') &&
+      backend.includes('CONVERSATION_SELECTOR') &&
+      backend.includes('REFERENCE_SELECTOR') &&
+      backend.includes('Selected project context:') &&
+      backend.includes('model-native-reference-reasoning-v1'),
+      'model-native referenced chat contract missing'
+    ],
     [directory.includes("WETHUS.respondToConnection"), 'connection response UI missing'],
     [hub.includes('function focusHubDeepLink()'), 'project hub deep-link focus missing'],
     [hub.includes('function renderHubSchedule()') && hub.includes("pendingHubFocus === 'schedule'"), 'project schedule detail route missing'],
@@ -78,6 +153,7 @@ function validateFrontendContracts() {
 }
 
 (async () => {
+  const mockOllama = await startMockOllama();
   const leaderFixture = actorState('leader-smoke', 'Leader Smoke', 'leader-smoke@example.com');
   leaderFixture.state.connections.push({
     id: 'cancelled-connection-tombstone',
@@ -104,7 +180,9 @@ function validateFrontendContracts() {
       WETHUS_WRITE_BACKUPS: 'false',
       NETWORK_REQUIRE_SESSION: 'false',
       AI_MEMORY_REQUIRE_SESSION: 'false',
-      AI_PROVIDER: 'none',
+      AI_PROVIDER: 'local',
+      OLLAMA_BASE_URL: `http://127.0.0.1:${mockOllamaPort}`,
+      OLLAMA_MODEL: 'wethus-network-smoke-model',
       RATE_LIMIT_DISABLED: 'true',
       ALLOWED_ORIGINS: 'http://127.0.0.1:8095'
     },
@@ -183,7 +261,12 @@ function validateFrontendContracts() {
       })
     });
     if (!mentor.memory?.enabled) fail('mentor response should persist actor-scoped memory');
-    if (!String(mentor.understanding?.situation || '').includes('인터뷰-요약.md')) fail('fallback reasoning should understand the attached document as part of the situation');
+    if (mentor.projectContextual !== true || mentor.understanding?.method !== 'model-native-reference-reasoning-v1') {
+      fail('mentor response should use model-native project reasoning');
+    }
+    if (!mentor.understanding?.usedAttachment || Number(mentor.references?.usedReferenceCount || 0) < 1) {
+      fail('mentor should make the attached project material available and report when the model uses it');
+    }
     const graph = await request('/ai/memory/graph?limit=80', 'leader-smoke');
     const attachmentNodes = graph.graph?.nodes?.filter((node) => node.type === 'Resource' && String(node.label || '').includes('인터뷰-요약')) || [];
     const attachmentNode = attachmentNodes[0];
@@ -203,6 +286,7 @@ function validateFrontendContracts() {
     process.exitCode = 1;
   } finally {
     server.kill();
+    await closeServer(mockOllama);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 })();

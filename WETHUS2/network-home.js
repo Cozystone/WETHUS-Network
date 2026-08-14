@@ -426,48 +426,6 @@
     ];
   }
 
-  function lightweightChatReply(prompt) {
-    const text = String(prompt || '').replace(/\s+/g, ' ').trim();
-    const normalized = text.toLowerCase().replace(/[~.。!！]+$/g, '').trim();
-    if (!text) return null;
-    if (/^(안녕|안녕하세요|하이|반가워|hello|hi)$/i.test(normalized)) {
-      return {
-        text: '안녕하세요. 프로젝트 이야기든 다른 궁금한 점이든 편하게 말씀해주세요.',
-        conversationMode: 'greeting',
-        projectContextual: false
-      };
-    }
-    if (/^(고마워|고맙습니다|감사|감사합니다|알겠어|알겠습니다|좋아|좋습니다|오케이|ㅇㅋ|응|그래|네)$/i.test(normalized)) {
-      return {
-        text: '좋아요. 이어서 궁금한 게 생기면 편하게 말씀해주세요.',
-        conversationMode: 'acknowledgement',
-        projectContextual: false
-      };
-    }
-    if (/^[?？!！.。~]+$/.test(text) || /^(뭐|뭐야|응|어|네)[?？]+$/i.test(text)) {
-      return {
-        text: '제가 방금 답을 너무 복잡하게 드렸나요? 궁금한 부분을 짧게 말씀해주시면 그 부분만 다시 답할게요.',
-        conversationMode: 'clarification',
-        projectContextual: false
-      };
-    }
-    if (/^(넌|너는|너가|네가)?\s*(뭐야|누구야|뭘\s*할\s*수\s*있어|무엇을\s*할\s*수\s*있어)[?？]?$/i.test(normalized)) {
-      return {
-        text: '저는 프로젝트의 작업, 일정, 활동 기록을 읽고 질문에 답하거나, 필요한 실행만 작업으로 반영하도록 돕는 WETHUS AI예요.',
-        conversationMode: 'capability',
-        projectContextual: false
-      };
-    }
-    if (/^(도와줘|도움이\s*필요해|뭘\s*물어봐야\s*해)[?？]?$/i.test(normalized)) {
-      return {
-        text: '무엇을 해결하고 싶은지 한 문장으로 말씀해주세요. 일정 정리, 다음 행동, 팀원 찾기처럼 원하는 결과만 알려주셔도 돼요.',
-        conversationMode: 'clarification',
-        projectContextual: false
-      };
-    }
-    return null;
-  }
-
   function normalizeChatHistory(messages) {
     const normalized = (Array.isArray(messages) ? messages : []).map((message) => ({ ...message }));
     normalized.forEach((message) => {
@@ -476,22 +434,13 @@
         message.actions = [];
         message.evidence = '';
       }
+      if (message?.role === 'ai' && message?.projectContextual === false) {
+        message.items = [];
+        message.actions = [];
+        message.evidence = '';
+        message.personId = '';
+      }
     });
-    for (let index = 0; index < normalized.length - 1; index += 1) {
-      const userMessage = normalized[index];
-      const assistantMessage = normalized[index + 1];
-      if (userMessage?.role !== 'user' || assistantMessage?.role !== 'ai') continue;
-      const lightweight = lightweightChatReply(userMessage.text);
-      if (!lightweight) continue;
-      normalized[index + 1] = {
-        ...assistantMessage,
-        ...lightweight,
-        items: [],
-        actions: [],
-        evidence: '',
-        personId: ''
-      };
-    }
     return normalized;
   }
 
@@ -795,10 +744,7 @@
 
   function flowActivityRows() {
     const events = window.WETHUS?.listSemanticEvents?.({ projectId: dashboard.activeProject?.id || '', limit: 12 }) || [];
-    const meaningfulEvents = events.filter((event) => !(
-      event?.action === 'ai_mentor_message_created'
-      && lightweightChatReply(event?.metadata?.prompt)
-    ));
+    const meaningfulEvents = events.filter((event) => event?.metadata?.projectContextual !== false);
     if (meaningfulEvents.length) return meaningfulEvents.slice(0, 8);
     return (Array.isArray(dashboard.hub?.recentActivities) ? dashboard.hub.recentActivities : [])
       .map((item, index) => ({
@@ -1622,37 +1568,6 @@
     });
   }
 
-  function fallbackAiReply(prompt) {
-    const lightweight = lightweightChatReply(prompt);
-    if (lightweight) return lightweight;
-    const lowered = String(prompt || '').toLowerCase();
-    const tasks = projectTasks();
-    if (/누가|팀원|사람|연결|역할/.test(lowered)) {
-      return {
-        text: '현재 단계에서는 현장 운영과 인터뷰를 동시에 맡아본 실행형 팀원이 가장 필요해요. 박지훈님이 프로젝트 문맥과 가장 잘 맞습니다.',
-        personId: 'network-person-field'
-      };
-    }
-    if (/우선|다음|이번 주|해야/.test(lowered)) {
-      return {
-        text: '최근 작업과 프로젝트 상태를 기준으로 다음 3가지를 먼저 끝내는 편이 좋습니다.',
-        items: tasks.slice(0, 3),
-        actions: tasks.slice(0, 3)
-      };
-    }
-    if (/인사이트|요약|활동|진척/.test(lowered)) {
-      return {
-        text: dashboard.hub?.mentorSummary || '문제와 검증 대상은 선명합니다. 실행 담당과 측정 기준을 확정하면 다음 단계로 넘어갈 수 있어요.',
-        actions: tasks.slice(0, 2)
-      };
-    }
-    return {
-      text: '현재 프로젝트 기록을 보면 실행 범위를 더 넓히기보다 이번 주 작업을 완료하고 인터뷰 근거를 쌓는 것이 우선이에요.',
-      items: tasks.slice(0, 3),
-      actions: tasks.slice(0, 3)
-    };
-  }
-
   function buildAgentMemoryContext() {
     const state = window.WETHUS?.getState?.() || {};
     const projects = dashboard.projects.filter((project) => project?.id).slice(0, 30);
@@ -1723,18 +1638,17 @@
   }
 
   async function requestProjectMentor(prompt, attachment) {
-    const lightweight = attachment ? null : lightweightChatReply(prompt);
-    if (lightweight) return lightweight;
-    if (!dashboard.activeProject?.id || (previewMode && !isLocal)) {
-      await new Promise((resolve) => setTimeout(resolve, 620));
-      return fallbackAiReply(prompt);
-    }
     const localBases = [`${location.protocol}//${location.hostname}:8787`, 'http://127.0.0.1:8787', 'http://localhost:8787'];
     const remoteBase = String(window.WETHUS_API_BASE || 'https://wethus-api.onrender.com').replace(/\/$/, '');
-    const bases = Array.from(new Set((isLocal ? [...localBases, remoteBase] : [remoteBase]).filter(Boolean)));
-    const activeHub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {};
+    const bases = Array.from(new Set((isLocal ? localBases : [remoteBase]).filter(Boolean)));
+    const focusProject = dashboard.activeProject?.id
+      ? dashboard.activeProject
+      : { id: '', title: 'WETHUS', category: 'General', status: '' };
+    const activeHub = dashboard.activeProject?.id
+      ? (window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {})
+      : {};
     const payload = {
-      project: dashboard.activeProject,
+      project: focusProject,
       hub: activeHub,
       events: window.WETHUS?.listSemanticEvents?.({ projectId: dashboard.activeProject.id, limit: 30 }) || [],
       insights: [],
@@ -1762,14 +1676,14 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data?.ok === false) throw new Error(data?.error || `AI 요청 실패 (${response.status})`);
-        const projectContextual = data.projectContextual !== false;
+        const projectContextual = data.projectContextual === true;
         const nextActions = projectContextual && Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [];
         return {
           text: String(data.summary || data.priority || '').trim() || '프로젝트 기록을 확인했습니다.',
           items: nextActions,
           actions: nextActions,
           evidence: '',
-          conversationMode: data.conversationMode || data?.understanding?.responseMode || '',
+          conversationMode: data.responseMode || data.conversationMode || data?.understanding?.responseMode || '',
           projectContextual,
           raw: data
         };
@@ -1779,9 +1693,7 @@
         window.clearTimeout(timeout);
       }
     }
-    const fallback = fallbackAiReply(prompt);
-    fallback.fallbackReason = lastError?.message || '';
-    return fallback;
+    throw lastError || new Error('AI 서버에 연결하지 못했습니다.');
   }
 
   async function sendChatMessage(prompt, options = {}) {
@@ -1813,14 +1725,14 @@
         evidence: response.evidence || '',
         personId: response.personId || '',
         conversationMode: response.conversationMode || '',
-        projectContextual: response.projectContextual !== false,
+        projectContextual: response.projectContextual === true,
         createdAt: new Date().toISOString()
       };
       const nextMessages = readMessages();
       nextMessages.push(assistantMessage);
       writeMessages(nextMessages);
 
-      if (dashboard.activeProject?.id && response.projectContextual !== false) {
+      if (dashboard.activeProject?.id && response.projectContextual === true) {
         const currentHub = window.WETHUS?.getProjectHub?.(dashboard.activeProject.id) || dashboard.hub || {};
         const raw = response.raw || {};
         const teamChat = [
@@ -1841,7 +1753,13 @@
           targetId: dashboard.activeProject.id,
           projectId: dashboard.activeProject.id,
           visibility: 'team',
-          metadata: { source: 'network-home', prompt: prompt.slice(0, 160) }
+          metadata: {
+            source: 'network-home',
+            prompt: prompt.slice(0, 160),
+            responseMode: response.conversationMode || 'project',
+            projectContextual: true,
+            referenceCount: Array.isArray(raw?.references?.usedReferenceIds) ? raw.references.usedReferenceIds.length : 0
+          }
         });
       }
     } catch (error) {
