@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#070707" />
+  <meta name="description" content="젊은 Builder들이 만나고, 만들고, 활동을 자산으로 쌓는 WETHUS Network." />
+  <title>WETHUS Network</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..900&family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">본문으로 건너뛰기</a>
+  <div class="ambient ambient--one" aria-hidden="true"></div>
+  <div class="ambient ambient--two" aria-hidden="true"></div>
+
+  <div class="app-shell">
+    <aside class="side-rail" aria-label="주요 메뉴">
+      <a class="brand" href="#for-you" data-route="for-you" aria-label="WETHUS 홈">
+        <span class="brand-mark">W</span>
+        <span class="brand-name">WETHUS</span>
+      </a>
+
+      <nav class="primary-nav" id="primaryNav"></nav>
+
+      <button class="ask-cta" type="button" data-open-ask>
+        <i data-lucide="plus" aria-hidden="true"></i>
+        <span>ASK 올리기</span>
+      </button>
+
+      <div class="rail-profile">
+        <button class="rail-profile__button" type="button" data-route="my-wethus" aria-label="내 WETHUS 열기">
+          <span class="avatar avatar--kim">김</span>
+          <span class="rail-profile__copy">
+            <strong>김안석</strong>
+            <small>Builder · Seoul</small>
+          </span>
+          <i data-lucide="chevron-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    </aside>
+
+    <div class="mobile-header">
+      <button class="mobile-brand" type="button" data-route="for-you"><span>W</span> WETHUS</button>
+      <div class="mobile-header__actions">
+        <button class="icon-button" type="button" data-copilot aria-label="AI Copilot 열기"><i data-lucide="sparkles"></i></button>
+        <button class="avatar avatar--kim" type="button" data-route="my-wethus" aria-label="내 프로필">김</button>
+      </div>
+    </div>
+
+    <main class="main-stage" id="mainContent" tabindex="-1">
+      <header class="top-command">
+        <label class="command-search">
+          <i data-lucide="search" aria-hidden="true"></i>
+          <input id="globalSearch" type="search" placeholder="사람, 프로젝트, ASK를 찾아보세요" autocomplete="off" />
+          <kbd>/</kbd>
+        </label>
+        <div class="top-command__actions">
+          <button class="icon-button notification-button" type="button" aria-label="알림"><i data-lucide="bell"></i><span></span></button>
+          <button class="copilot-button" type="button" data-copilot><i data-lucide="sparkles"></i> Network Copilot</button>
+        </div>
+      </header>
+
+      <div class="route-view" id="routeView" aria-live="polite"></div>
+    </main>
+
+    <aside class="context-rail" id="contextRail" aria-label="맥락 정보"></aside>
+  </div>
+
+  <nav class="bottom-nav" id="bottomNav" aria-label="모바일 주요 메뉴"></nav>
+
+  <dialog class="sheet" id="askDialog" aria-labelledby="askDialogTitle">
+    <form method="dialog" class="sheet__card" id="askForm">
+      <div class="sheet__header">
+        <div>
+          <span class="eyebrow">OPEN ASK</span>
+          <h2 id="askDialogTitle">지금 필요한 도움을 알려주세요.</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="닫기"><i data-lucide="x"></i></button>
+      </div>
+      <p class="sheet__intro">ASK는 공개 글이 아니라, 해결 가능성이 높은 사람에게 전달되는 요청입니다.</p>
+      <label class="field">
+        <span>어떤 도움이 필요한가요?</span>
+        <textarea id="askText" required maxlength="180" placeholder="예: 중학생 5명을 대상으로 인터뷰 질문을 검토해줄 UX 리서처를 찾습니다."></textarea>
+        <small><b id="askCount">0</b>/180</small>
+      </label>
+      <div class="field-row">
+        <label class="field"><span>연결할 프로젝트</span><select id="askProject"><option>FocusFlow</option><option>프로젝트 없음</option></select></label>
+        <label class="field"><span>필요 시점</span><select id="askDue"><option>이번 주</option><option>2주 안</option><option>일정 무관</option></select></label>
+      </div>
+      <fieldset class="visibility-picker">
+        <legend>공개 범위</legend>
+        <label><input type="radio" name="visibility" value="network" checked /><span><i data-lucide="users"></i><b>WETHUS Network</b><small>연결 가능성이 높은 멤버에게 표시</small></span></label>
+        <label><input type="radio" name="visibility" value="team" /><span><i data-lucide="lock"></i><b>내 팀만</b><small>FocusFlow 팀원에게만 표시</small></span></label>
+      </fieldset>
+      <div class="sheet__footer">
+        <button class="button button--ghost" type="button" data-close-dialog>취소</button>
+        <button class="button button--primary" type="submit">ASK 보내기 <i data-lucide="arrow-up-right"></i></button>
+      </div>
+    </form>
+  </dialog>
+
+  <aside class="copilot-drawer" id="copilotDrawer" aria-hidden="true" aria-label="Network Copilot">
+    <div class="copilot-drawer__head">
+      <div class="copilot-identity"><span><i data-lucide="sparkles"></i></span><div><strong>Network Copilot</strong><small>WETHUS 활동 문맥 사용</small></div></div>
+      <button class="icon-button" type="button" data-close-copilot aria-label="닫기"><i data-lucide="x"></i></button>
+    </div>
+    <div class="copilot-thread" id="copilotThread"></div>
+    <form class="copilot-compose" id="copilotForm">
+      <label><span class="sr-only">Copilot에게 질문</span><textarea id="copilotInput" rows="1" placeholder="지금 무엇을 하면 좋을까?"></textarea></label>
+      <button type="submit" aria-label="보내기"><i data-lucide="arrow-up"></i></button>
+    </form>
+  </aside>
+  <div class="scrim" id="scrim" data-close-copilot></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
